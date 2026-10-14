@@ -1,0 +1,346 @@
+@import "tailwindcss";
+
+/* Self-hosted latin subsets with stable paths so index.html can preload them (no third-party requests). */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/inter-latin-var.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Fraunces Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/fraunces-latin-var.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/jetbrains-mono-latin-var.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+/*
+  Chairside design tokens. Metaphor: "the operatory chart" — the calm, ruled paper of a dental chart.
+  Ruled 1px lines, readings in tabular monospace, charting notation (symbol + word) for every status,
+  and a soft editorial serif for page titles so the product feels like a well-kept clinical record,
+  not a generic dashboard. One accent: sterile teal, for primary actions and the current selection.
+  Job titles get their own colour, always paired with the title text. Dark is tuned separately.
+  Every text pair is >= 4.5:1 and every UI edge >= 3:1 (checked with a script).
+*/
+:root {
+  --c-bg: #f6f5f1;
+  --c-surface: #ffffff;
+  --c-raised: #fbfaf7;
+  --c-ink: #1b2530;
+  --c-muted: #56616c;
+  --c-line: #e2dfd7;
+  --c-line-strong: #8c939a;
+  --c-accent: #0d6963;
+  --c-accent-strong: #0a5550;
+  --c-on-accent: #ffffff;
+  --c-accent-soft: #e2f1ef;
+  --c-warn: #7a4a00;
+  --c-warn-bg: #fcefd8;
+  --c-block: #9e2418;
+  --c-block-bg: #fbe6e2;
+  --c-ok: #1d6637;
+  --c-ok-bg: #e2f2e7;
+  --c-focus: #0d6963;
+  --c-job-dentist: #3b4fb8;
+  --c-job-dentist-bg: #e8ebfa;
+  --c-job-hygienist: #0b6a8a;
+  --c-job-hygienist-bg: #e1f2f8;
+  --c-job-assistant: #8a4b00;
+  --c-job-assistant-bg: #fbeedd;
+  --c-job-reception: #7a3b8f;
+  --c-job-reception-bg: #f4e8f7;
+  --c-job-manager: #475467;
+  --c-job-manager-bg: #edeff2;
+  --c-job-owner: #a3324f;
+  --c-job-owner-bg: #fae7ec;
+  --c-draft: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--c-line-strong) 22%, transparent) 6px 7px);
+  --shadow-1: 0 1px 2px rgb(27 37 48 / 0.06), 0 1px 1px rgb(27 37 48 / 0.04);
+  --shadow-2: 0 10px 30px -12px rgb(27 37 48 / 0.25), 0 2px 6px rgb(27 37 48 / 0.06);
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 420ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-bg: #0f151a;
+    --c-surface: #161f26;
+    --c-raised: #1a242c;
+    --c-ink: #e6ebee;
+    --c-muted: #9ba8b3;
+    --c-line: #26313b;
+    --c-line-strong: #66737f;
+    --c-accent: #56c7b8;
+    --c-accent-strong: #7dd8cb;
+    --c-on-accent: #05231f;
+    --c-accent-soft: #15302d;
+    --c-warn: #f3bc66;
+    --c-warn-bg: #2d2414;
+    --c-block: #ff8f80;
+    --c-block-bg: #351a1b;
+    --c-ok: #74d597;
+    --c-ok-bg: #13291c;
+    --c-focus: #56c7b8;
+    --c-job-dentist: #a9b5ff;
+    --c-job-dentist-bg: #1e2547;
+    --c-job-hygienist: #7fd3f0;
+    --c-job-hygienist-bg: #11303b;
+    --c-job-assistant: #f5be7a;
+    --c-job-assistant-bg: #33240f;
+    --c-job-reception: #e0a9f2;
+    --c-job-reception-bg: #2f1a36;
+    --c-job-manager: #b9c3cf;
+    --c-job-manager-bg: #232b33;
+    --c-job-owner: #ff9db5;
+    --c-job-owner-bg: #3a1a23;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-2: 0 14px 34px -12px rgb(0 0 0 / 0.7), 0 2px 6px rgb(0 0 0 / 0.4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --c-bg: #0f151a;
+  --c-surface: #161f26;
+  --c-raised: #1a242c;
+  --c-ink: #e6ebee;
+  --c-muted: #9ba8b3;
+  --c-line: #26313b;
+  --c-line-strong: #66737f;
+  --c-accent: #56c7b8;
+  --c-accent-strong: #7dd8cb;
+  --c-on-accent: #05231f;
+  --c-accent-soft: #15302d;
+  --c-warn: #f3bc66;
+  --c-warn-bg: #2d2414;
+  --c-block: #ff8f80;
+  --c-block-bg: #351a1b;
+  --c-ok: #74d597;
+  --c-ok-bg: #13291c;
+  --c-focus: #56c7b8;
+  --c-job-dentist: #a9b5ff;
+  --c-job-dentist-bg: #1e2547;
+  --c-job-hygienist: #7fd3f0;
+  --c-job-hygienist-bg: #11303b;
+  --c-job-assistant: #f5be7a;
+  --c-job-assistant-bg: #33240f;
+  --c-job-reception: #e0a9f2;
+  --c-job-reception-bg: #2f1a36;
+  --c-job-manager: #b9c3cf;
+  --c-job-manager-bg: #232b33;
+  --c-job-owner: #ff9db5;
+  --c-job-owner-bg: #3a1a23;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 14px 34px -12px rgb(0 0 0 / 0.7), 0 2px 6px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-raised: var(--c-raised);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-accent: var(--c-accent);
+  --color-accent-strong: var(--c-accent-strong);
+  --color-on-accent: var(--c-on-accent);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-warn: var(--c-warn);
+  --color-warn-bg: var(--c-warn-bg);
+  --color-block: var(--c-block);
+  --color-block-bg: var(--c-block-bg);
+  --color-ok: var(--c-ok);
+  --color-ok-bg: var(--c-ok-bg);
+  --radius-control: 8px;
+  --radius-card: 14px;
+  --radius-badge: 999px;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-display: "Fraunces Variable", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  /* Type scale: page title, section title, body, small, label */
+  --text-title: 1.75rem;
+  --text-title--line-height: 1.15;
+  --text-section: 1.0625rem;
+  --text-section--line-height: 1.35;
+}
+
+html { background: var(--c-bg); }
+body {
+  @apply bg-bg text-ink font-sans antialiased;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  min-width: 320px;
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Fieldsets default to min-content width, which lets a wide table push the page sideways. */
+fieldset { min-inline-size: 0; }
+
+:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+::selection { background: var(--c-accent-soft); color: var(--c-ink); }
+
+@layer components {
+  .skip-link { @apply sr-only; }
+  .skip-link:focus {
+    @apply not-sr-only fixed left-3 top-3 z-50 rounded-control bg-accent px-4 py-2 text-on-accent;
+  }
+
+  .page-title {
+    font-family: var(--font-display);
+    font-size: var(--text-title);
+    line-height: var(--text-title--line-height);
+    font-weight: 560;
+    letter-spacing: -0.015em;
+    font-variation-settings: "opsz" 72, "SOFT" 50;
+  }
+  .display-number {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: lining-nums tabular-nums;
+  }
+  .eyebrow { @apply text-xs font-semibold uppercase tracking-[0.08em] text-muted; }
+  .section-title { @apply text-section font-semibold tracking-tight; }
+  .reading { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+  .card { @apply rounded-card border border-line bg-surface; box-shadow: var(--shadow-1); }
+  .card-hover { transition: border-color var(--dur-fast), transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast); }
+  .card-hover:hover { border-color: var(--c-line-strong); transform: translateY(-1px); box-shadow: var(--shadow-2); }
+
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-control border border-line-strong bg-surface px-4 text-sm font-medium text-ink select-none;
+    transition: background-color var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast);
+  }
+  .btn:hover:not(:disabled) { @apply bg-raised; border-color: var(--c-ink); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled { @apply cursor-not-allowed opacity-60; }
+  .btn-primary { @apply border-accent bg-accent text-on-accent; box-shadow: var(--shadow-1); }
+  .btn-primary:hover:not(:disabled) { background: var(--c-accent-strong); border-color: var(--c-accent-strong); }
+  .btn-danger { @apply border-block bg-surface text-block; }
+  .btn-danger:hover:not(:disabled) { @apply bg-block-bg; border-color: var(--c-block); }
+  .btn-quiet { @apply border-transparent bg-transparent; }
+  .btn-quiet:hover:not(:disabled) { @apply bg-raised; border-color: transparent; }
+  .btn-sm { @apply min-h-9 px-3; }
+  .btn-icon { @apply min-h-11 min-w-11 px-0; }
+
+  .field { @apply flex flex-col gap-1.5; }
+  .label { @apply text-sm font-medium; }
+  .help { @apply text-sm text-muted; }
+  .field-error { @apply flex items-start gap-1 text-sm text-block; }
+  .input {
+    @apply min-h-11 w-full rounded-control border border-line-strong bg-surface px-3 text-ink;
+    transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  }
+  .input:hover { border-color: var(--c-ink); }
+  .input:focus-visible { outline: none; border-color: var(--c-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-accent) 30%, transparent); }
+  .input[aria-invalid="true"] { @apply border-block; }
+  textarea.input { @apply py-2; }
+  .check { @apply flex min-h-11 items-center gap-2; }
+  .check input { width: 1.125rem; height: 1.125rem; accent-color: var(--c-accent); }
+
+  /* Segmented control: radio inputs styled as one pill row. */
+  .segmented { @apply inline-flex flex-wrap gap-1 rounded-control border border-line bg-raised p-1; }
+  .segmented label { @apply relative flex min-h-9 cursor-pointer items-center gap-1.5 rounded-[6px] px-3 text-sm font-medium text-muted; }
+  .segmented input { @apply sr-only; }
+  .segmented label:has(input:checked) { @apply bg-surface text-ink; box-shadow: var(--shadow-1); }
+  .segmented label:has(input:focus-visible) { outline: 2px solid var(--c-focus); outline-offset: 1px; }
+
+  .badge { @apply inline-flex items-center gap-1 whitespace-nowrap rounded-badge border px-2 py-0.5 text-xs font-medium; }
+  .badge-neutral { @apply border-line bg-raised text-muted; }
+  .badge-ok { @apply border-transparent bg-ok-bg text-ok; }
+  .badge-warn { @apply border-transparent bg-warn-bg text-warn; }
+  .badge-block { @apply border-transparent bg-block-bg text-block; }
+  .badge-accent { @apply border-transparent bg-accent-soft text-accent; }
+
+  .alert { @apply flex gap-3 rounded-card border p-3 text-sm; }
+  .alert-warn { @apply border-warn bg-warn-bg text-warn; }
+  .alert-block { @apply border-block bg-block-bg text-block; }
+  .alert-ok { @apply border-ok bg-ok-bg text-ok; }
+
+  /* relative: keeps absolutely positioned sr-only labels inside the scroll container. */
+  .table-wrap { @apply relative overflow-x-auto rounded-card border border-line bg-surface; box-shadow: var(--shadow-1); }
+  .table { @apply w-full border-collapse text-sm; }
+  .table th { @apply border-b border-line bg-raised px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted; }
+  .table td { @apply border-b border-line px-3 py-2.5 align-middle; }
+  .table tr:last-child td { @apply border-b-0; }
+  .table tbody tr { transition: background-color var(--dur-fast); }
+  .table tbody tr:hover { @apply bg-raised; }
+
+  /* Job-title colour: a stripe and a soft fill, always next to the title text. */
+  .job { --job: var(--c-job-manager); --job-bg: var(--c-job-manager-bg); }
+  .job-dentist { --job: var(--c-job-dentist); --job-bg: var(--c-job-dentist-bg); }
+  .job-hygienist { --job: var(--c-job-hygienist); --job-bg: var(--c-job-hygienist-bg); }
+  .job-assistant { --job: var(--c-job-assistant); --job-bg: var(--c-job-assistant-bg); }
+  .job-reception { --job: var(--c-job-reception); --job-bg: var(--c-job-reception-bg); }
+  .job-owner { --job: var(--c-job-owner); --job-bg: var(--c-job-owner-bg); }
+  .job-dot { @apply inline-block h-2 w-2 shrink-0 rounded-full; background: var(--job); }
+
+  .avatar {
+    @apply inline-grid shrink-0 place-items-center rounded-full font-semibold;
+    background: var(--job-bg, var(--c-accent-soft));
+    color: var(--job, var(--c-accent));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--job, var(--c-accent)) 30%, transparent);
+  }
+
+  .skeleton {
+    @apply rounded-control;
+    background: linear-gradient(90deg, var(--c-line) 0%, var(--c-raised) 50%, var(--c-line) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton { animation: none; }
+  }
+
+  .enter { animation: enter var(--dur-slow) var(--ease-out) both; }
+
+  dialog.sheet {
+    @apply m-auto w-[min(34rem,calc(100vw-1.5rem))] rounded-card border border-line bg-surface p-0 text-ink;
+    box-shadow: var(--shadow-2);
+  }
+  dialog.sheet[open] { animation: pop var(--dur-base) var(--ease-out); }
+  dialog.sheet::backdrop { background: rgb(15 21 26 / 0.5); backdrop-filter: blur(2px); }
+  /* On phones the sheet rises from the bottom, within thumb reach. */
+  @media (max-width: 639px) {
+    dialog.sheet {
+      @apply mb-0 w-full max-w-none rounded-b-none;
+      max-height: 88dvh;
+    }
+    dialog.sheet[open] { animation: rise var(--dur-slow) var(--ease-out); }
+  }
+}
+
+@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes enter { from { opacity: 0; transform: translateY(6px); } }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@keyframes rise { from { transform: translateY(100%); } }
+@keyframes ring-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 45%, transparent); } 100% { box-shadow: 0 0 0 18px transparent; } }
+@keyframes draw { from { stroke-dashoffset: 48; } to { stroke-dashoffset: 0; } }

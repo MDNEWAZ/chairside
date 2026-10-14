@@ -1,0 +1,5 @@
+User-agent: *
+# The app is private; only the sign-in and sign-up pages are public.
+Allow: /login
+Allow: /signup
+Disallow: /
