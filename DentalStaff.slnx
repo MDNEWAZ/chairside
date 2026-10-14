@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/database/">
+    <Project Path="database/DentalStaff.DbMigrator/DentalStaff.DbMigrator.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/DentalStaff.Api/DentalStaff.Api.csproj" />
+    <Project Path="src/DentalStaff.Application/DentalStaff.Application.csproj" />
+    <Project Path="src/DentalStaff.Domain/DentalStaff.Domain.csproj" />
+    <Project Path="src/DentalStaff.Infrastructure/DentalStaff.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DentalStaff.Tests/DentalStaff.Tests.csproj" />
+  </Folder>
+</Solution>
