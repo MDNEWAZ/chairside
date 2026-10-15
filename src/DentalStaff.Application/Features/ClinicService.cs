@@ -55,6 +55,7 @@ public sealed class ClinicService(IAppDbContext db, ICurrentUser user, Access ac
 
     public async Task<ClinicSettingsDto> SettingsAsync(CancellationToken ct)
     {
+        access.RequireManager();
         var c = await scope.ClinicAsync(ct);
         return new ClinicSettingsDto(c.Name, c.TimeZoneId, c.WorkweekStart, c.OvertimeThresholdHours, c.DefaultBreakMinutes, c.LeaveAllowanceDays);
     }
@@ -90,9 +91,11 @@ public sealed class ClinicService(IAppDbContext db, ICurrentUser user, Access ac
         new Validator()
             .Text(r.Name, "name", "a location name", 100)
             .Text(r.Address, "address", "an address", 300, required: false)
+            .Require(IsDemo is false, "name", "Locations cannot be added in the demo clinic. Sign up to set up your own.")
             .Require(count < Plans.MaxLocations(clinic.PlanCode), "name", $"Your plan includes {Plans.MaxLocations(clinic.PlanCode)} location(s). Change plan to add more.")
             .ThrowIfInvalid();
-        if (await db.Locations.AnyAsync(l => l.Name == r.Name.Trim(), ct)) throw ValidationException.For("name", "A location with this name already exists.");
+        var name = r.Name.Trim();
+        if (await db.Locations.AnyAsync(l => l.Name.ToLower() == name.ToLower(), ct)) throw ValidationException.For("name", "A location with this name already exists.");
 
         db.Locations.Add(new Location { ClinicId = user.ClinicId, Name = r.Name.Trim(), Address = string.IsNullOrWhiteSpace(r.Address) ? null : r.Address.Trim() });
         await db.SaveChangesAsync(ct);
@@ -114,6 +117,7 @@ public sealed class ClinicService(IAppDbContext db, ICurrentUser user, Access ac
     public async Task<BillingDto> ChangePlanAsync(ChangePlanRequest r, CancellationToken ct)
     {
         access.RequireOwner();
+        if (IsDemo) throw new ConflictException("The demo clinic's plan cannot be changed. Sign up to try billing on your own clinic.");
         if (!Plans.IsKnown(r.PlanCode) || r.PlanCode == Plans.Trial) throw ValidationException.For("planCode", "Choose Starter or Practice.");
         var locations = await db.Locations.CountAsync(l => l.IsActive, ct);
         if (locations > Plans.MaxLocations(r.PlanCode))
@@ -136,13 +140,18 @@ public sealed class ClinicService(IAppDbContext db, ICurrentUser user, Access ac
     public async Task<CoverageDto> SaveCoverageAsync(CoverageDto r, CancellationToken ct)
     {
         access.RequireOwner();
+        var cells = r.Cells ?? [];
+        var jobTitleIds = await db.JobTitles.AsNoTracking().Select(j => j.JobTitleId).ToListAsync(ct);
         new Validator()
             .Require(await db.Locations.AnyAsync(l => l.LocationId == r.LocationId, ct), "locationId", "Choose a location.")
-            .Require(r.Cells.All(c => c.MinHeadcount is >= 0 and <= 20), "cells", "Each minimum must be between 0 and 20.")
+            .Require(cells.Count <= jobTitleIds.Count * 7, "cells", "There are more cells than job titles and weekdays.")
+            .Require(cells.All(c => jobTitleIds.Contains(c.JobTitleId) && Enum.IsDefined(c.Weekday)), "cells", "Each cell needs a job title and a weekday from this clinic.")
+            .Require(cells.DistinctBy(c => (c.JobTitleId, c.Weekday)).Count() == cells.Count, "cells", "Each job title and weekday can appear once.")
+            .Require(cells.All(c => c.MinHeadcount is >= 0 and <= 20), "cells", "Each minimum must be between 0 and 20.")
             .ThrowIfInvalid();
 
         var existing = await db.CoverageRules.Where(c => c.LocationId == r.LocationId).ToListAsync(ct);
-        foreach (var cell in r.Cells)
+        foreach (var cell in cells)
         {
             var rule = existing.FirstOrDefault(e => e.JobTitleId == cell.JobTitleId && e.Weekday == cell.Weekday);
             if (rule is null && cell.MinHeadcount > 0)
@@ -165,9 +174,12 @@ public sealed class ClinicService(IAppDbContext db, ICurrentUser user, Access ac
         access.RequireOwner();
         new Validator()
             .Text(r.Name, "name", "a name", 80)
+            .Date(r.ClosedOn, "closedOn", "date")
             .Require(r.LocationId is null || await db.Locations.AnyAsync(l => l.LocationId == r.LocationId, ct), "locationId", "Choose a location.")
             .Require(r.ClosedOn >= await scope.TodayAsync(ct), "closedOn", "Choose today or a future date.")
             .ThrowIfInvalid();
+        if (await db.ClosedDays.AnyAsync(c => c.ClosedOn == r.ClosedOn && c.LocationId == r.LocationId, ct))
+            throw ValidationException.For("closedOn", "This day is already closed for that location.");
         db.ClosedDays.Add(new ClosedDay { ClinicId = user.ClinicId, ClosedOn = r.ClosedOn, Name = r.Name.Trim(), LocationId = r.LocationId });
         await db.SaveChangesAsync(ct);
         return await ClosedDaysAsync(ct);
@@ -181,6 +193,8 @@ public sealed class ClinicService(IAppDbContext db, ICurrentUser user, Access ac
         await db.SaveChangesAsync(ct);
         return await ClosedDaysAsync(ct);
     }
+
+    private bool IsDemo => user.ClinicId == AuthService.DemoClinicId;
 
     /// <summary>Everything the clinic owns, as JSON. Password hashes and invitation tokens are never included.</summary>
     public async Task<object> ExportAsync(CancellationToken ct)

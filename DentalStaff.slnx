@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/database/">
+    <Project Path="database/DentalStaff.Database/DentalStaff.Database.csproj" />
     <Project Path="database/DentalStaff.DbMigrator/DentalStaff.DbMigrator.csproj" />
   </Folder>
   <Folder Name="/src/">

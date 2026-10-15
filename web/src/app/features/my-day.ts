@@ -5,6 +5,7 @@ import { Api } from '../core/api';
 import { addDays, day, hours, instant, time, todayIn } from '../core/format';
 import { Session } from '../core/session';
 import { Toasts } from '../core/toast';
+import { Confirm } from '../core/confirm';
 import { Icon } from '../shared/icons';
 import { Badge, ErrorState, Loader, Mutation, PageHeader } from '../shared/ui';
 import { ScrollRegion } from '../shared/scroll-region';
@@ -201,9 +202,15 @@ export class MyDay implements OnInit {
     const first = (this.status.data()?.recent ?? []).find((r) => r.missingClockOut);
     return first ? this.atDay(first.clockInUtc) : '';
   });
+  private readonly confirm = inject(Confirm);
+  /** How far this device's clock is from the server's, so a wrong phone clock does not skew the timer. Re-measured on each load. */
+  protected readonly clockOffset = computed(() => {
+    const s = this.status.data();
+    return s ? Date.now() - Date.parse(s.serverUtc) : 0;
+  });
   private readonly openMinutes = computed(() => {
     const open = this.status.data()?.open;
-    return open ? Math.max(0, (this.now().getTime() - new Date(open.clockInUtc).getTime()) / 60000) : 0;
+    return open ? Math.max(0, (this.now().getTime() - this.clockOffset() - new Date(open.clockInUtc).getTime()) / 60000) : 0;
   });
   protected readonly elapsed = computed(() => {
     const mins = Math.floor(this.openMinutes());
@@ -250,6 +257,11 @@ export class MyDay implements OnInit {
 
   protected async clockIn(): Promise<void> {
     const s = await this.m.run(() => this.api.clockIn(this.locationId));
+    if (!s) {
+      this.toasts.show(this.m.error()?.message ?? 'Could not clock in.', 'block');
+      void this.status.load();
+      return;
+    }
     if (s) {
       this.status.data.set(s);
       this.celebrate();
@@ -258,7 +270,20 @@ export class MyDay implements OnInit {
   }
 
   protected async clockOut(): Promise<void> {
+    // A tap moments after clocking in is usually a mistake: check first.
+    const open = this.status.data()?.open;
+    if (open && Date.now() - this.clockOffset() - new Date(open.clockInUtc).getTime() < 15 * 60_000) {
+      const answer = await this.confirm.ask({
+        title: 'Clock out already?', body: `You clocked in at ${this.at(open.clockInUtc)}, only a few minutes ago.`, confirmLabel: 'Clock out',
+      });
+      if (!answer.confirmed) return;
+    }
     const s = await this.m.run(() => this.api.clockOut());
+    if (!s) {
+      this.toasts.show(this.m.error()?.message ?? 'Could not clock out.', 'block');
+      void this.status.load();
+      return;
+    }
     if (s) {
       this.status.data.set(s);
       this.celebrate();

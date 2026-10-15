@@ -7,6 +7,8 @@ import { addDays, day, todayIn } from '../core/format';
 import { InboxItem, Leave as LeaveRecord, LeaveBalance, LeaveDraft } from '../core/models';
 import { Session } from '../core/session';
 import { Toasts } from '../core/toast';
+import { Confirm } from '../core/confirm';
+import { TabList } from '../shared/tablist';
 import { Badge, ErrorState, Loader, Mutation, PageHeader, focusFirstError } from '../shared/ui';
 import { Avatar, jobClass } from '../shared/brand';
 import { Icon, IconName } from '../shared/icons';
@@ -15,7 +17,7 @@ import { Icon, IconName } from '../shared/icons';
 @Component({
   selector: 'app-leave',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, PageHeader, Badge, ErrorState, Avatar, Icon],
+  imports: [FormsModule, PageHeader, Badge, ErrorState, Avatar, Icon, TabList],
   template: `
     <app-page-header eyebrow="Time off" title="Leave" subtitle="Request time off and see where your requests stand." />
 
@@ -80,11 +82,12 @@ import { Icon, IconName } from '../shared/icons';
                 </div>
                 @if (draft.leaveType === 'annual') {
                   <div class="mt-3 border-t border-line pt-3">
-                    <div class="flex justify-between text-xs text-muted"><span>Annual balance after this</span><span class="reading font-semibold text-ink">{{ p.balance.remaining - p.days }} of {{ p.balance.allowance }}</span></div>
+                    <div class="flex justify-between text-xs text-muted"><span>Left for {{ p.balance.year }} after this{{ p.balance.pending ? ' and your pending requests' : '' }}</span><span class="reading font-semibold" [class.text-block]="after(p) < 0" [class.text-ink]="after(p) >= 0">{{ after(p) }} of {{ p.balance.allowance }}</span></div>
                     <span class="mt-1.5 flex h-2 overflow-hidden rounded-full bg-line" aria-hidden="true">
-                      <span class="h-full bg-accent" [style.width.%]="pct(p.balance.remaining - p.days, p.balance.allowance)"></span>
+                      <span class="h-full bg-accent" [style.width.%]="pct(after(p), p.balance.allowance)"></span>
                       <span class="h-full" style="background-image: var(--c-draft); background-color: var(--c-accent-soft)" [style.width.%]="pct(p.days, p.balance.allowance)"></span>
                     </span>
+                    @if (after(p) < 0) { <p class="mt-2 text-sm text-block">This is more annual leave than you have left. Shorten the dates or choose another type.</p> }
                   </div>
                 }
               } @else if (previewError()) {
@@ -137,6 +140,9 @@ import { Icon, IconName } from '../shared/icons';
                       </div>
                       <p class="mt-0.5 text-sm text-muted">{{ typeLabel(r.leaveType) }} · <span class="reading">{{ r.daysCounted }}</span> day{{ r.daysCounted === 1 ? '' : 's' }}</p>
                       @if (r.decidedBy) { <p class="mt-1.5 rounded-control bg-raised px-2.5 py-1.5 text-sm">{{ r.decidedBy }}{{ r.decisionComment ? ': “' + r.decisionComment + '”' : ' decided this.' }}</p> }
+                      @if (r.status === 'pending') {
+                        <button type="button" class="btn btn-ghost btn-sm mt-2 -ml-2" [disabled]="w.busy()" (click)="withdraw(r)">Withdraw request<span class="sr-only"> for {{ range(r) }}</span></button>
+                      }
                     </div>
                   </li>
                 }
@@ -187,7 +193,7 @@ import { Icon, IconName } from '../shared/icons';
 
                   <div class="mt-4 flex flex-col gap-3 border-t border-line pt-4 sm:flex-row sm:items-end">
                     <div class="field flex-1">
-                      <label class="label" [for]="'c' + item.request.leaveRequestId">Comment (optional)</label>
+                      <label class="label" [for]="'c' + item.request.leaveRequestId">Comment <span class="font-normal text-muted">(needed to reject)</span></label>
                       <input class="input" [id]="'c' + item.request.leaveRequestId" maxlength="500" [(ngModel)]="comments[item.request.leaveRequestId]" [name]="'c' + item.request.leaveRequestId">
                     </div>
                     <div class="flex gap-2">
@@ -215,6 +221,8 @@ export class Leave implements OnInit {
   protected readonly inbox = new Loader(() => this.api.inbox());
   protected readonly m = new Mutation();
   protected readonly d = new Mutation();
+  protected readonly w = new Mutation();
+  private readonly confirm = inject(Confirm);
   protected readonly tab = signal<'mine' | 'inbox'>('mine');
   protected readonly preview = signal<{ days: number; balance: LeaveBalance } | null>(null);
   protected readonly previewError = signal<string | null>(null);
@@ -267,11 +275,51 @@ export class Leave implements OnInit {
     this.previewRequests.next();
   }
 
+  protected after(p: { days: number; balance: LeaveBalance }): number {
+    return p.balance.remaining - p.balance.pending - p.days;
+  }
+
+  protected async withdraw(r: LeaveRecord): Promise<void> {
+    const answer = await this.confirm.ask({
+      title: 'Withdraw this request?', body: `Your request for ${this.range(r)} is removed and your manager no longer sees it.`,
+      confirmLabel: 'Withdraw request', danger: true,
+    });
+    if (!answer.confirmed) return;
+    const result = await this.w.run(() => this.api.cancelLeave(r.leaveRequestId));
+    if (!result) {
+      this.toasts.show(this.w.error()?.message ?? 'Could not withdraw the request.', 'block');
+      void this.mine.load();
+      return;
+    }
+    this.mine.data.set(result);
+    this.previewRequests.next();
+    this.toasts.show('Request withdrawn.');
+  }
+
   protected async decide(item: InboxItem, approve: boolean): Promise<void> {
     const id = item.request.leaveRequestId;
-    const result = await this.d.run(() => this.api.decide(id, approve, this.comments[id] || null));
+    const who = item.request.staffName;
+    let comment = (this.comments[id] ?? '').trim();
+    if (!approve) {
+      // A rejection always says why, so the person is not left guessing.
+      const answer = await this.confirm.ask({
+        title: `Reject leave for ${who}?`, body: `${this.range(item.request)}. They are notified with your reason.`,
+        confirmLabel: 'Reject request', danger: true,
+        input: { label: 'Reason', required: true, maxLength: 500, help: 'For example: two others are already off that week.', value: comment },
+      });
+      if (!answer.confirmed) return;
+      comment = answer.text.trim();
+    } else if (item.impact.length) {
+      const answer = await this.confirm.ask({
+        title: `Approve and leave the location short?`, body: `Approving ${who}'s leave drops staffing below the minimum on these days:`,
+        confirmLabel: 'Approve anyway', details: item.impact.map((i) => `${day(i.date)} at ${i.location}: ${i.remainingAfter} of ${i.minimum} ${i.jobTitle}`),
+      });
+      if (!answer.confirmed) return;
+    }
+    const result = await this.d.run(() => this.api.decide(id, approve, comment || null));
     if (!result) {
-      this.toasts.show(this.d.error()?.message ?? 'Could not save the decision.', 'block');
+      this.toasts.show(this.d.error()?.fields['comment'] ?? this.d.error()?.message ?? 'Could not save the decision.', 'block');
+      if (this.d.error()?.status === 409 || this.d.error()?.status === 404) void this.inbox.load();
       return;
     }
     this.inbox.data.set(result);

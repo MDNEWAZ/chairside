@@ -36,6 +36,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             $"UPDATE app.AttendanceRecord SET ClockOutUtc = SYSUTCDATETIME() WHERE AttendanceId = {attendanceId} AND ClockOutUtc IS NULL",
             cancellationToken);
 
+    public Task AcquireLockAsync(string resource, CancellationToken cancellationToken) =>
+        Database.ExecuteSqlInterpolatedAsync(
+            $"EXEC sp_getapplock @Resource = {resource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000",
+            cancellationToken);
+
     public Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken) =>
         // Retry-on-failure needs the whole transaction wrapped in the execution strategy.
         Database.CreateExecutionStrategy().ExecuteAsync(async () =>
@@ -68,7 +73,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         });
         b.Entity<UserAccount>(e => e.ToTable("UserAccount").HasKey(x => x.UserId));
         b.Entity<Location>(e => e.ToTable("Location", t => t.HasTrigger("trg_Location_Audit")));
-        b.Entity<JobTitle>().ToTable("JobTitle");
+        b.Entity<JobTitle>().ToTable("JobTitle", t => t.HasTrigger("trg_JobTitle_Audit"));
         b.Entity<Staff>(e =>
         {
             e.ToTable("Staff", t => t.HasTrigger("trg_Staff_Audit"));
@@ -76,10 +81,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         });
         b.Entity<Invitation>(e =>
         {
-            e.ToTable("Invitation");
+            e.ToTable("Invitation", t => t.HasTrigger("trg_Invitation_Audit"));
             e.Property(x => x.TokenHash).IsUnicode(false).IsFixedLength().HasMaxLength(64);
         });
-        b.Entity<ShiftDefinition>().ToTable("ShiftDefinition");
+        b.Entity<ShiftDefinition>().ToTable("ShiftDefinition", t => t.HasTrigger("trg_ShiftDefinition_Audit"));
         b.Entity<StaffWorkPattern>(e =>
         {
             e.ToTable("StaffWorkPattern", t => t.HasTrigger("trg_StaffWorkPattern_Audit"));
@@ -88,7 +93,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         });
         b.Entity<StaffWorkPatternDay>(e =>
         {
-            e.ToTable("StaffWorkPatternDay");
+            e.ToTable("StaffWorkPatternDay", t => t.HasTrigger("trg_StaffWorkPatternDay_Audit"));
             e.HasKey(x => x.PatternDayId);
             e.Property(x => x.Weekday).HasConversion<byte>();
         });
@@ -103,7 +108,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.ToTable("CoverageRule", t => t.HasTrigger("trg_CoverageRule_Audit"));
             e.Property(x => x.Weekday).HasConversion<byte>();
         });
-        b.Entity<CredentialType>().ToTable("CredentialType");
+        b.Entity<CredentialType>().ToTable("CredentialType", t => t.HasTrigger("trg_CredentialType_Audit"));
         b.Entity<CredentialTypeJobTitle>(e => e.ToTable("CredentialTypeJobTitle").HasKey(x => new { x.CredentialTypeId, x.JobTitleId }));
         b.Entity<Credential>(e => e.ToTable("Credential", t => t.HasTrigger("trg_Credential_Audit")));
         b.Entity<LeaveRequest>(e =>

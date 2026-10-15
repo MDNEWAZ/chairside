@@ -152,17 +152,22 @@ export class Loader<T> {
   readonly loading = signal(false);
   readonly error = signal<ApiError | null>(null);
 
+  private seq = 0;
+
   constructor(private readonly fetch: () => Observable<T>) {}
 
+  /** Loads again; when calls overlap (fast week or location switching) only the latest answer is kept. */
   async load(): Promise<void> {
+    const ticket = ++this.seq;
     this.loading.set(true);
     this.error.set(null);
     try {
-      this.data.set(await firstValueFrom(this.fetch()));
+      const data = await firstValueFrom(this.fetch());
+      if (ticket === this.seq) this.data.set(data);
     } catch (e) {
-      this.error.set(toApiError(e));
+      if (ticket === this.seq) this.error.set(toApiError(e));
     } finally {
-      this.loading.set(false);
+      if (ticket === this.seq) this.loading.set(false);
     }
   }
 }

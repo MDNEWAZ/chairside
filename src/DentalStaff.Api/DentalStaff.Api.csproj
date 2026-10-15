@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\DentalStaff.Application\DentalStaff.Application.csproj" />
     <ProjectReference Include="..\DentalStaff.Infrastructure\DentalStaff.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\database\DentalStaff.Database\DentalStaff.Database.csproj" />
   </ItemGroup>
 
 </Project>

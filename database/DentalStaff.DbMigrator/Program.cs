@@ -1,8 +1,7 @@
-using System.Reflection;
-using DbUp;
+using DentalStaff.Database;
 using Microsoft.Extensions.Configuration;
 
-// Applies every not-yet-run script in Scripts/ in name order, inside one transaction.
+// Creates the database if needed and applies every pending script.
 // Connection string: appsettings.json, or env var ConnectionStrings__DentalStaff, or the first argument.
 var configuration = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
@@ -17,16 +16,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
     return 1;
 }
 
-EnsureDatabase.For.SqlDatabase(connectionString);
-
-var upgrader = DeployChanges.To
-    .SqlDatabase(connectionString)
-    .WithScriptsEmbeddedInAssembly(Assembly.GetExecutingAssembly())
-    .WithTransaction()
-    .LogToConsole()
-    .Build();
-
-var result = upgrader.PerformUpgrade();
+var result = DatabaseMigrator.Upgrade(connectionString, createDatabaseIfMissing: true, Console.WriteLine);
 if (!result.Successful)
 {
     Console.ForegroundColor = ConsoleColor.Red;

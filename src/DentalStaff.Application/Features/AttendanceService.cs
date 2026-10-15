@@ -53,26 +53,31 @@ public sealed class AttendanceService(
             throw ValidationException.For("locationId", "Choose the location you are at.");
 
         var startOfToday = calendar.ToUtc(today, TimeOnly.MinValue);
-        if (await db.Attendance.AnyAsync(a => a.StaffId == user.StaffId && a.ClockOutUtc == null && a.ClockInUtc >= startOfToday, ct))
-            throw new ConflictException("You are already clocked in. Clock out first.");
-
         var shift = await db.Shifts.AsNoTracking()
             .Where(s => s.StaffId == user.StaffId && s.ShiftDate == today && s.LocationId == r.LocationId && s.IsPublished)
             .FirstOrDefaultAsync(ct);
         var clinic = await scope.ClinicAsync(ct);
-        db.Attendance.Add(new AttendanceRecord
+        await db.InTransactionAsync(async () =>
         {
-            ClinicId = user.ClinicId, StaffId = user.StaffId, ShiftId = shift?.ShiftId, LocationId = r.LocationId,
-            UnpaidBreakMinutes = shift?.UnpaidBreakMinutes ?? clinic.DefaultBreakMinutes, IsUnscheduled = shift is null,
-            // ClockInUtc is left unset: the database default SYSUTCDATETIME() supplies it.
-        });
-        if (shift is null)
-        {
-            var name = await db.Staff.Where(s => s.StaffId == user.StaffId).Select(s => s.FirstName + " " + s.LastName).SingleAsync(ct);
-            var managers = (await notifier.ManagersOfAsync(r.LocationId, ct)).Where(id => id != user.StaffId);
-            await notifier.NotifyAsync(managers, "unscheduled_clock_in", $"{name} clocked in without a scheduled shift. Please confirm it.", ct);
-        }
-        await db.SaveChangesAsync(ct);
+            // A double tap, or two devices at once, must not open two records: the check and insert run one at a time per person.
+            await db.AcquireLockAsync($"clock:{user.StaffId}", ct);
+            if (await db.Attendance.AnyAsync(a => a.StaffId == user.StaffId && a.ClockOutUtc == null && a.ClockInUtc >= startOfToday, ct))
+                throw new ConflictException("You are already clocked in. Clock out first.");
+            db.Attendance.Add(new AttendanceRecord
+            {
+                ClinicId = user.ClinicId, StaffId = user.StaffId, ShiftId = shift?.ShiftId, LocationId = r.LocationId,
+                UnpaidBreakMinutes = shift is null ? clinic.DefaultBreakMinutes : shift.UnpaidBreakMinutes, IsUnscheduled = shift is null,
+                // ClockInUtc is left unset: the database default SYSUTCDATETIME() supplies it.
+            });
+            if (shift is null)
+            {
+                var name = await db.Staff.Where(s => s.StaffId == user.StaffId).Select(s => s.FirstName + " " + s.LastName).SingleAsync(ct);
+                var managers = (await notifier.ManagersOfAsync(r.LocationId, ct)).Where(id => id != user.StaffId);
+                await notifier.NotifyAsync(managers, "unscheduled_clock_in", $"{name} clocked in without a scheduled shift. Please confirm it.", ct);
+            }
+            await db.SaveChangesAsync(ct);
+            return true;
+        }, ct);
         analytics.Track("clocked_in", new { unscheduled = shift is null });
         return await StatusAsync(ct);
     }
@@ -83,6 +88,7 @@ public sealed class AttendanceService(
         var startOfToday = calendar.ToUtc(calendar.Today(clock.UtcNow), TimeOnly.MinValue);
         var open = await db.Attendance.AsNoTracking()
             .Where(a => a.StaffId == user.StaffId && a.ClockOutUtc == null && a.ClockInUtc >= startOfToday)
+            .OrderByDescending(a => a.ClockInUtc)
             .Select(a => (int?)a.AttendanceId).FirstOrDefaultAsync(ct);
         if (open is null) throw new ConflictException("You are not clocked in today.");
 
@@ -105,11 +111,17 @@ public sealed class AttendanceService(
     {
         var record = await LoadForManagerAsync(id, ct);
         var calendar = await scope.CalendarAsync(ct);
-        var inUtc = calendar.ToUtc(r.ClockInDate, r.ClockInTime);
-        DateTime? outUtc = r.ClockOutDate is { } d && r.ClockOutTime is { } t ? calendar.ToUtc(d, t) : null;
+        var today = calendar.Today(clock.UtcNow);
+        new Validator()
+            .Date(r.ClockInDate, "clockInDate", "clock-in date")
+            .Date(r.ClockOutDate ?? r.ClockInDate, "clockOutDate", "clock-out date")
+            .ThrowIfInvalid();
+        var inUtc = LocalToUtc(calendar, r.ClockInDate, r.ClockInTime, "clockInTime");
+        DateTime? outUtc = r.ClockOutDate is { } d && r.ClockOutTime is { } t ? LocalToUtc(calendar, d, t, "clockOutTime") : null;
 
         var v = new Validator()
-            .Text(r.Note, "note", "a note explaining the correction", 300)
+            .Text(r.Note, "note", "a note explaining the correction", 300, multiline: true)
+            .Require(outUtc is not null || r.ClockInDate >= today, "clockOutTime", "Enter the clock-out time: a past day cannot stay open.")
             .Require(r.UnpaidBreakMinutes is >= 0 and <= 120, "unpaidBreakMinutes", "Break must be between 0 and 120 minutes.")
             .Require((r.ClockOutDate is null) == (r.ClockOutTime is null), "clockOutTime", "Enter both the clock-out date and time.")
             .Require(inUtc <= clock.UtcNow, "clockInTime", "Clock-in cannot be in the future.");
@@ -121,6 +133,12 @@ public sealed class AttendanceService(
              .Require(r.UnpaidBreakMinutes < (o - inUtc).TotalMinutes, "unpaidBreakMinutes", "Break must be shorter than the time worked.");
         }
         v.ThrowIfInvalid();
+
+        // Two records for the same person may not overlap, or the hours would be paid twice.
+        var end = outUtc ?? clock.UtcNow;
+        var overlaps = await db.Attendance.AsNoTracking().AnyAsync(a => a.StaffId == record.StaffId && a.AttendanceId != id
+            && a.ClockInUtc < end && (a.ClockOutUtc ?? clock.UtcNow) > inUtc, ct);
+        if (overlaps) throw ValidationException.For("clockInTime", "These times overlap another attendance record for this person.");
 
         record.ClockInUtc = inUtc;
         record.ClockOutUtc = outUtc;
@@ -146,7 +164,21 @@ public sealed class AttendanceService(
         var record = await db.Attendance.SingleOrDefaultAsync(a => a.AttendanceId == id, ct) ?? throw new NotFoundException("This attendance record no longer exists.");
         access.RequireManagesLocation(record.LocationId);
         if (record.StaffId == user.StaffId) throw new ForbiddenException("You cannot correct your own attendance. Ask the Owner / Admin.");
+        if (!access.IsOwner)
+        {
+            var role = await db.Staff.AsNoTracking().Where(s => s.StaffId == record.StaffId).Select(s => s.Role).SingleAsync(ct);
+            if (Roles.IsManager(role)) throw new ForbiddenException("Only the Owner / Admin can correct a manager's attendance.");
+        }
         return record;
+    }
+
+    private static DateTime LocalToUtc(ClinicCalendar calendar, DateOnly date, TimeOnly time, string field)
+    {
+        try { return calendar.ToUtc(date, time); }
+        catch (NonexistentLocalTimeException)
+        {
+            throw ValidationException.For(field, $"{time:h:mm tt} did not happen on {date:MMM d}: the clocks moved forward an hour. Use a time after the change.");
+        }
     }
 
     private async Task<List<AttendanceDto>> ListAsync(System.Linq.Expressions.Expression<Func<AttendanceRecord, bool>> filter, CancellationToken ct)
@@ -163,14 +195,18 @@ public sealed class AttendanceService(
             select new { a, s.FirstName, s.LastName, s.OvertimeEligible, l.Name }).Take(500).ToListAsync(ct);
 
         // Weekly hours add up across both locations for the workweek in the clinic settings.
-        var weeks = rows.Select(x => (x.a.StaffId, Week: calendar.WeekStartFor(DateOnly.FromDateTime(calendar.ToLocal(x.a.ClockInUtc))))).Distinct().ToList();
+        // One query for every person and week on the page, instead of one per person and week.
+        WeekOf WeekOfUtc(DateTime utc) => new(calendar.WeekStartFor(DateOnly.FromDateTime(calendar.ToLocal(utc))));
         var weeklyHours = new Dictionary<(int, DateOnly), decimal>();
-        foreach (var (staffId, week) in weeks)
+        if (rows.Count > 0)
         {
-            var from = calendar.ToUtc(week, TimeOnly.MinValue);
-            var to = calendar.ToUtc(week.AddDays(7), TimeOnly.MinValue);
-            var records = await db.Attendance.AsNoTracking().Where(a => a.StaffId == staffId && a.ClockInUtc >= from && a.ClockInUtc < to).ToListAsync(ct);
-            weeklyHours[(staffId, week)] = records.Sum(r => r.PaidHours ?? 0);
+            var staffIds = rows.Select(x => x.a.StaffId).Distinct().ToList();
+            var from = calendar.ToUtc(rows.Min(x => WeekOfUtc(x.a.ClockInUtc).Start), TimeOnly.MinValue);
+            var to = calendar.ToUtc(rows.Max(x => WeekOfUtc(x.a.ClockInUtc).Start).AddDays(7), TimeOnly.MinValue);
+            var all = await db.Attendance.AsNoTracking()
+                .Where(a => staffIds.Contains(a.StaffId) && a.ClockInUtc >= from && a.ClockInUtc < to).ToListAsync(ct);
+            foreach (var g in all.GroupBy(a => (a.StaffId, WeekOfUtc(a.ClockInUtc).Start)))
+                weeklyHours[g.Key] = g.Sum(a => a.PaidHours ?? 0);
         }
 
         return rows.Select(x =>
@@ -181,7 +217,9 @@ public sealed class AttendanceService(
             return new AttendanceDto(x.a.AttendanceId, x.a.StaffId, $"{x.FirstName} {x.LastName}", x.a.LocationId, x.Name,
                 x.a.ClockInUtc, x.a.ClockOutUtc, x.a.UnpaidBreakMinutes, x.a.PaidHours, x.a.IsUnscheduled,
                 x.a.UnscheduledConfirmedByStaffId is not null, missing,
-                x.OvertimeEligible && weeklyHours[(x.a.StaffId, week)] > clinic.OvertimeThresholdHours, x.a.CorrectionNote);
+                x.OvertimeEligible && weeklyHours.GetValueOrDefault((x.a.StaffId, week)) > clinic.OvertimeThresholdHours, x.a.CorrectionNote);
         }).ToList();
     }
+
+    private readonly record struct WeekOf(DateOnly Start);
 }

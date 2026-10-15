@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Deployment output and real production settings (contain secrets)
+/deploy/out/
+/deploy/appsettings.Production.json

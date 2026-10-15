@@ -62,7 +62,7 @@ public sealed class StaffService(
             throw new ForbiddenException("You can only view your own profile.");
 
         var pattern = await CurrentPatternAsync(id, ct);
-        var invitePending = await db.Invitations.AnyAsync(i => i.StaffId == id && i.AcceptedUtc == null && i.ExpiresUtc > clock.UtcNow, ct);
+        var invitePending = await db.Invitations.AnyAsync(i => i.StaffId == id && i.AcceptedUtc == null && i.RevokedUtc == null && i.ExpiresUtc > clock.UtcNow, ct);
         return new StaffDetailDto(s.StaffId, s.FirstName, s.LastName, s.Email, s.Phone, s.Role, s.JobTitleId, s.HomeLocationId, s.StartDate,
             s.IsActive, s.OvertimeEligible, s.EmploymentType, s.UserId is not null, invitePending,
             pattern?.Days.OrderBy(d => ((int)d.Weekday + 6) % 7).Select(d => new PatternDayDto(d.Weekday, d.ShiftDefinitionId, d.LocationId)).ToList() ?? [],
@@ -75,9 +75,14 @@ public sealed class StaffService(
         var jobTitle = await ValidateAsync(input, null, ct);
         var staff = new Staff { ClinicId = user.ClinicId };
         Apply(staff, input, jobTitle);
-        db.Staff.Add(staff);
-        await db.SaveChangesAsync(ct);
-        await SavePatternAsync(staff.StaffId, input.Pattern, ct);
+        // One unit: a failed pattern save must not leave a half-created person behind.
+        await db.InTransactionAsync(async () =>
+        {
+            db.Staff.Add(staff);
+            await db.SaveChangesAsync(ct);
+            await SavePatternAsync(staff.StaffId, input.Pattern, ct);
+            return true;
+        }, ct);
         analytics.Track("staff_added", new { role = staff.Role });
         return await GetAsync(staff.StaffId, ct);
     }
@@ -89,9 +94,19 @@ public sealed class StaffService(
         var jobTitle = await ValidateAsync(input, id, ct);
         if (staff.StaffId == user.StaffId && jobTitle.Role != staff.Role)
             throw ValidationException.For("jobTitleId", "You cannot change your own role.");
+        var newEmail = (input.Email ?? "").Trim().ToLowerInvariant();
+        // The sign-in email lives on the account; changing it here would split the two and could hand the profile to someone else.
+        if (staff.UserId is not null && newEmail != staff.Email)
+            throw ValidationException.For("email", "This person already signs in with this email, so it cannot be changed here.");
+        if (IsDemo && staff.UserId is not null && jobTitle.Role != staff.Role)
+            throw ValidationException.For("jobTitleId", "Demo sign-in roles cannot be changed, so the demo keeps working for everyone.");
         Apply(staff, input, jobTitle);
-        await db.SaveChangesAsync(ct);
-        await SavePatternAsync(id, input.Pattern, ct);
+        await db.InTransactionAsync(async () =>
+        {
+            await db.SaveChangesAsync(ct);
+            await SavePatternAsync(id, input.Pattern, ct);
+            return true;
+        }, ct);
         return await GetAsync(id, ct);
     }
 
@@ -100,8 +115,36 @@ public sealed class StaffService(
         var staff = await db.Staff.SingleOrDefaultAsync(s => s.StaffId == id, ct) ?? throw new NotFoundException("This staff member does not exist.");
         RequireCanEdit(staff);
         if (staff.StaffId == user.StaffId) throw new ConflictException("You cannot deactivate yourself.");
-        staff.IsActive = active; // never deleted: history stays (brief: deactivate, do not delete)
-        await db.SaveChangesAsync(ct);
+        if (IsDemo && staff.UserId is not null && !active)
+            throw new ConflictException("Demo sign-in people cannot be deactivated, so the demo keeps working for everyone.");
+        if (staff.IsActive == active) return await GetAsync(id, ct);
+
+        var today = await scope.TodayAsync(ct);
+        await db.InTransactionAsync(async () =>
+        {
+            staff.IsActive = active; // never deleted: history stays (brief: deactivate, do not delete)
+            if (!active)
+            {
+                // Someone who has left cannot work future shifts, take pending leave, accept an invitation, or stay signed in.
+                var future = await db.Shifts.Where(s => s.StaffId == id && s.ShiftDate > today).ToListAsync(ct);
+                var futureIds = future.Select(f => f.ShiftId).ToList();
+                db.ScheduleOverrides.RemoveRange(await db.ScheduleOverrides.Where(o => futureIds.Contains(o.ShiftId)).ToListAsync(ct));
+                db.Shifts.RemoveRange(future);
+                foreach (var leave in await db.LeaveRequests.Where(l => l.StaffId == id && l.Status == LeaveStatuses.Pending).ToListAsync(ct))
+                {
+                    leave.Status = LeaveStatuses.Rejected;
+                    leave.DecidedByStaffId = user.StaffId;
+                    leave.DecidedAtUtc = clock.UtcNow;
+                    leave.DecisionComment = "Closed automatically: this person was deactivated.";
+                }
+                foreach (var invite in await db.Invitations.Where(i => i.StaffId == id && i.AcceptedUtc == null && i.RevokedUtc == null).ToListAsync(ct))
+                    invite.RevokedUtc = clock.UtcNow;
+                if (staff.UserId is { } userId && await db.UserAccounts.SingleOrDefaultAsync(u => u.UserId == userId, ct) is { } account)
+                    account.SecurityStamp = Guid.NewGuid();
+            }
+            await db.SaveChangesAsync(ct);
+            return true;
+        }, ct);
         return await GetAsync(id, ct);
     }
 
@@ -111,9 +154,16 @@ public sealed class StaffService(
         var staff = await db.Staff.AsNoTracking().SingleOrDefaultAsync(s => s.StaffId == id, ct) ?? throw new NotFoundException("This staff member does not exist.");
         if (staff.UserId is not null) throw new ConflictException("This person already has an account.");
         if (!staff.IsActive) throw new ConflictException("Reactivate this person before inviting them.");
+        if (IsDemo) throw new ConflictException("Invitations are turned off in the demo clinic. Sign up for your own clinic to invite your team.");
 
         var token = AuthService.NewToken();
-        var invite = new Invitation { ClinicId = user.ClinicId, StaffId = id, TokenHash = AuthService.HashToken(token), ExpiresUtc = clock.UtcNow.AddDays(7) };
+        // A new link replaces any earlier one, and only works for the address it was sent to.
+        foreach (var old in await db.Invitations.Where(i => i.StaffId == id && i.AcceptedUtc == null && i.RevokedUtc == null).ToListAsync(ct))
+            old.RevokedUtc = clock.UtcNow;
+        var invite = new Invitation
+        {
+            ClinicId = user.ClinicId, StaffId = id, Email = staff.Email, TokenHash = AuthService.HashToken(token), ExpiresUtc = clock.UtcNow.AddDays(7),
+        };
         db.Invitations.Add(invite);
         await db.SaveChangesAsync(ct);
         var path = $"/invite/{token}";
@@ -125,10 +175,10 @@ public sealed class StaffService(
     public async Task<StaffDetailDto> AddCredentialAsync(int staffId, AddCredentialRequest r, CancellationToken ct)
     {
         var staff = await db.Staff.AsNoTracking().SingleOrDefaultAsync(s => s.StaffId == staffId, ct) ?? throw new NotFoundException("This staff member does not exist.");
-        access.RequireManagesLocation(staff.HomeLocationId);
+        RequireCanEditCredentials(staff);
         new Validator()
             .Require(await db.CredentialTypes.AnyAsync(c => c.CredentialTypeId == r.CredentialTypeId, ct), "credentialTypeId", "Choose a credential type.")
-            .Require(r.ExpiresOn > new DateOnly(2000, 1, 1) && r.ExpiresOn < new DateOnly(2100, 1, 1), "expiresOn", "Enter a valid expiry date.")
+            .Date(r.ExpiresOn, "expiresOn", "expiry date")
             .ThrowIfInvalid();
         db.Credentials.Add(new Credential { ClinicId = user.ClinicId, StaffId = staffId, CredentialTypeId = r.CredentialTypeId, ExpiresOn = r.ExpiresOn });
         await db.SaveChangesAsync(ct);
@@ -140,7 +190,7 @@ public sealed class StaffService(
         var credential = await db.Credentials.SingleOrDefaultAsync(c => c.CredentialId == credentialId && c.StaffId == staffId, ct)
                          ?? throw new NotFoundException("This credential was already removed.");
         var staff = await db.Staff.AsNoTracking().SingleAsync(s => s.StaffId == staffId, ct);
-        access.RequireManagesLocation(staff.HomeLocationId);
+        RequireCanEditCredentials(staff);
         db.Credentials.Remove(credential);
         await db.SaveChangesAsync(ct);
         return await GetAsync(staffId, ct);
@@ -207,6 +257,19 @@ public sealed class StaffService(
         await db.SaveChangesAsync(ct);
     }
 
+    private bool IsDemo => user.ClinicId == AuthService.DemoClinicId;
+
+    /// <summary>
+    /// Licences gate publishing, so only the Owner / Admin may change a manager's. A Practice Manager therefore
+    /// can never change their own.
+    /// </summary>
+    private void RequireCanEditCredentials(Staff staff)
+    {
+        access.RequireManagesLocation(staff.HomeLocationId);
+        if (!access.IsOwner && staff.Role is not (Roles.ClinicalStaff or Roles.Reception))
+            throw new ForbiddenException("Only the Owner / Admin can change a manager's credentials.");
+    }
+
     private void RequireCanEdit(Staff staff)
     {
         access.RequireManagesLocation(staff.HomeLocationId);
@@ -244,7 +307,9 @@ public sealed class StaffService(
             .Require(jobTitle is not null, "jobTitleId", "Choose a job title.")
             .Require(locationIds.Contains(input.HomeLocationId), "homeLocationId", "Choose a home location.")
             .Require(input.EmploymentType is "full_time" or "part_time", "employmentType", "Choose full time or part time.")
+            .Require(pattern.Count <= 7 && pattern.All(p => Enum.IsDefined(p.Weekday)), "pattern", "Choose working days from Monday to Sunday.")
             .Require(pattern.Select(p => p.Weekday).Distinct().Count() == pattern.Count, "pattern", "Each weekday can appear once.")
+            .Date(input.StartDate, "startDate", "start date")
             .Require(pattern.All(p => locationIds.Contains(p.LocationId) && definitionIds.Contains(p.ShiftDefinitionId)), "pattern", "Choose a shift and location for each working day.");
         if (jobTitle is not null)
         {

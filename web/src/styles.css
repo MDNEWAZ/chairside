@@ -344,3 +344,16 @@ fieldset { min-inline-size: 0; }
 @keyframes rise { from { transform: translateY(100%); } }
 @keyframes ring-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-accent) 45%, transparent); } 100% { box-shadow: 0 0 0 18px transparent; } }
 @keyframes draw { from { stroke-dashoffset: 48; } to { stroke-dashoffset: 0; } }
+
+/* Print: the weekly schedule and lists are pinned up in break rooms. Hide chrome, use paper colours. */
+@media print {
+  :root, :root[data-theme="dark"] {
+    --c-bg: #fff; --c-surface: #fff; --c-raised: #fff; --c-ink: #000; --c-muted: #333; --c-line: #999;
+  }
+  body { background: #fff !important; color: #000 !important; }
+  nav, header[role="banner"], aside, .btn, [role="status"], [role="alert"], app-sheet, .no-print { display: none !important; }
+  main { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+  .card { box-shadow: none !important; border: 1px solid #999 !important; break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
+  * { animation: none !important; transition: none !important; }
+}

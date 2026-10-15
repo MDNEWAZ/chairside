@@ -88,3 +88,7 @@ The four checks live in `Domain/Rules/ScheduleChecker.cs` as a pure function ove
 ## D8. Authentication without ASP.NET Core Identity stores
 
 Cookie authentication plus the Identity `PasswordHasher` (PBKDF2). The full Identity EF stores would own their schema, which conflicts with D1 (schema owned by DbUp scripts). The cookie is re-validated against the database on every request so deactivation and role changes apply immediately. Two-factor sign-in is on the roadmap.
+
+## D9. Security audit before the first client test (2026-10-15)
+
+A full security, logic and UX audit before publishing. Script 0006 adds unique indexes for the rules the app already enforced (so races cannot break them), tenant-leading indexes for row-level security, audit triggers for the remaining policy tables, `Invitation.Email`/`RevokedUtc` and `UserAccount.SecurityStamp`. In the application: invitations are bound to their address and can never take over an account; sessions are revoked by stamp on sign-out and deactivation; deactivation also removes future shifts, closes pending leave and revokes invitations; leave counts only published shifts (D2) and the annual allowance, including pending requests, is enforced; a Practice Manager cannot change a manager's credentials or attendance; times skipped by daylight saving are a field error instead of a silent shift. Rejections need a reason; staff can withdraw a pending request.

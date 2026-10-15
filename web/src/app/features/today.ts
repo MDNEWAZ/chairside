@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
@@ -229,7 +229,14 @@ export class Today implements OnInit {
   ngOnInit(): void {
     this.locationId.set(this.session.me()?.homeLocationId ?? null);
     void this.reload();
+    // The front desk leaves this open all day: refresh who is in every minute while the tab is visible.
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible' && !this.data.loading()) void this.reload();
+    }, 60_000);
+    this.destroyRef.onDestroy(() => clearInterval(timer));
   }
+
+  private readonly destroyRef = inject(DestroyRef);
 
   protected async reload(): Promise<void> {
     await this.data.load();

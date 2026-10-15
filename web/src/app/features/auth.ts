@@ -133,9 +133,10 @@ async function finish(session: Session, router: Router, me: Me, returnUrl?: stri
         </div>
         <div class="field">
           <label class="label" for="password">Password</label>
-          <input id="password" class="input" type="password" formControlName="password" autocomplete="current-password"
-                 [attr.aria-invalid]="!!m.fields()['password'] || null" [attr.aria-describedby]="m.fields()['password'] ? 'password-error' : null">
+          <input id="password" class="input" type="password" formControlName="password" autocomplete="current-password" maxlength="128"
+                 [attr.aria-invalid]="!!m.fields()['password'] || null" [attr.aria-describedby]="m.fields()['password'] ? 'password-error forgot-help' : 'forgot-help'">
           @if (m.fields()['password']; as e) { <p id="password-error" class="field-error">{{ e }}</p> }
+          <p id="forgot-help" class="help">Forgot your password? Ask your clinic's Owner / Admin to reset your access.</p>
         </div>
         @if (m.error() && !hasFieldErrors()) { <p class="field-error" role="alert">{{ m.error()!.message }}</p> }
         <button type="submit" class="btn btn-primary w-full" [disabled]="m.busy()">{{ m.busy() ? 'Signing in' : 'Sign in' }}</button>
@@ -219,8 +220,8 @@ export class Login implements OnInit {
         </div>
         <div class="field">
           <label class="label" for="password">Password</label>
-          <input id="password" class="input" type="password" formControlName="password" autocomplete="new-password" [attr.aria-describedby]="f()['password'] ? 'password-help password-error' : 'password-help'" [attr.aria-invalid]="!!f()['password'] || null">
-          <p id="password-help" class="help">At least 10 characters. A short phrase is easy to remember.</p>
+          <input id="password" class="input" type="password" formControlName="password" autocomplete="new-password" maxlength="128" [attr.aria-describedby]="f()['password'] ? 'password-help password-error' : 'password-help'" [attr.aria-invalid]="!!f()['password'] || null">
+          <p id="password-help" class="help">At least 10 characters. A short phrase is easy to remember; avoid common passwords and your email.</p>
           @if (f()['password']; as e) { <p id="password-error" class="field-error">{{ e }}</p> }
         </div>
         <div class="field">
@@ -302,7 +303,7 @@ export class Signup {
       <form class="mt-6 flex flex-col gap-4" [formGroup]="form" (ngSubmit)="submit()" novalidate>
         <div class="field">
           <label class="label" for="password">Password</label>
-          <input id="password" class="input" type="password" formControlName="password" autocomplete="new-password" [attr.aria-describedby]="m.fields()['password'] ? 'pw-help pw-error' : 'pw-help'"
+          <input id="password" class="input" type="password" formControlName="password" autocomplete="new-password" maxlength="128" [attr.aria-describedby]="m.fields()['password'] ? 'pw-help pw-error' : 'pw-help'"
                  [attr.aria-invalid]="!!m.fields()['password'] || null">
           <p id="pw-help" class="help">At least 10 characters.</p>
           @if (m.fields()['password']; as e) { <p id="pw-error" class="field-error">{{ e }}</p> }

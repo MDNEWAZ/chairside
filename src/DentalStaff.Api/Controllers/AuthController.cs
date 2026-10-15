@@ -37,8 +37,11 @@ public sealed class AuthController(AuthService auth, ICurrentUser user, IConfigu
     public object PublicConfig() => new { demoEnabled = config.GetValue("Demo:Enabled", false), minPasswordLength = AuthService.MinPasswordLength };
 
     [HttpPost("logout")]
-    public async Task<IActionResult> Logout()
+    public async Task<IActionResult> Logout(CancellationToken ct)
     {
+        // Ends this session everywhere, so a copied cookie stops working too. Demo personas are shared by many
+        // visitors, so signing out one of them must not sign out the others.
+        if (user.ClinicId != AuthService.DemoClinicId) await auth.SignOutEverywhereAsync(user.UserId, ct);
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return NoContent();
     }

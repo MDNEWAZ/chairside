@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import {
   ArrowRight, BadgeCheck, Bell, Building2, CalendarCheck, CalendarDays, ChartGantt, Check, ChevronLeft, ChevronRight, CircleAlert,
-  CircleCheck, Clock, ClipboardCheck, Download, Ellipsis, GripVertical, History, House, Info, LayoutDashboard, ListChecks, LogIn, LogOut,
+  CircleCheck, Clock, ClipboardCheck, Copy, Download, Ellipsis, GripVertical, History, House, Info, LayoutDashboard, ListChecks, LogIn, LogOut,
   LucideAngularModule, LucideIconData, MapPin, Monitor, Moon, Plus, Rows3, ScrollText, Search, Send, Settings, ShieldCheck, Sparkles,
   SquarePen, Stethoscope, Sun, Timer, Trash2, TreePalm, TriangleAlert, Undo2, UserPlus, UserRound, Users, WandSparkles, X,
 } from 'lucide-angular';
@@ -10,7 +10,7 @@ import {
 const ICONS = {
   'arrow-right': ArrowRight, 'badge-check': BadgeCheck, bell: Bell, building: Building2, 'calendar-check': CalendarCheck,
   calendar: CalendarDays, gantt: ChartGantt, check: Check, 'chevron-left': ChevronLeft, 'chevron-right': ChevronRight,
-  'circle-alert': CircleAlert, 'circle-check': CircleCheck, clock: Clock, clipboard: ClipboardCheck, download: Download,
+  'circle-alert': CircleAlert, 'circle-check': CircleCheck, clock: Clock, clipboard: ClipboardCheck, copy: Copy, download: Download,
   more: Ellipsis, grip: GripVertical, history: History, home: House, info: Info, dashboard: LayoutDashboard, checklist: ListChecks,
   'log-in': LogIn, 'log-out': LogOut, pin: MapPin, monitor: Monitor, moon: Moon, plus: Plus, rows: Rows3, audit: ScrollText,
   search: Search, send: Send, settings: Settings, shield: ShieldCheck, sparkles: Sparkles, edit: SquarePen, clinical: Stethoscope,

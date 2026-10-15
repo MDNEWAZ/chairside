@@ -21,7 +21,11 @@ public sealed class SimulatedEmailSender(ILogger<SimulatedEmailSender> logger) :
 {
     public Task SendAsync(string to, string subject, string body, CancellationToken cancellationToken)
     {
-        logger.LogInformation("SIMULATED EMAIL to {To}: {Subject} | {Body}", to, subject, body);
+        // Never log a full address or a sign-in link: logs are read by more people than the inbox is.
+        var at = to.IndexOf('@');
+        var maskedTo = at > 1 ? to[0] + new string('*', at - 1) + to[at..] : "***";
+        var safeBody = System.Text.RegularExpressions.Regex.Replace(body, @"/invite/[A-Za-z0-9_-]+", "/invite/[redacted]");
+        logger.LogInformation("SIMULATED EMAIL to {To}: {Subject} | {Body}", maskedTo, subject, safeBody);
         return Task.CompletedTask;
     }
 }

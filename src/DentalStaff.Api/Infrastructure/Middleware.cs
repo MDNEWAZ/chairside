@@ -16,6 +16,13 @@ public sealed class AppExceptionHandler(IProblemDetailsService problemDetails, I
             ForbiddenException e => new ProblemDetails { Status = 403, Title = e.Message },
             ConflictException e => new ProblemDetails { Status = 409, Title = e.Message },
             UnauthorizedAccessException => new ProblemDetails { Status = 401, Title = "Please sign in again." },
+            DentalStaff.Domain.Rules.NonexistentLocalTimeException => new ProblemDetails
+            {
+                Status = 400, Title = "That time does not exist on that day because the clocks moved forward. Choose a time after the change.",
+            },
+            // Unique-index violations (two people saving the same thing at once) are conflicts, not server errors.
+            Microsoft.EntityFrameworkCore.DbUpdateException { InnerException: Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 } } =>
+                new ProblemDetails { Status = 409, Title = "This was just changed by someone else. Reload and try again." },
             _ => new ProblemDetails { Status = 500, Title = "Something went wrong on our side. Try again in a moment." },
         };
         if (problem.Status == 500) logger.LogError(exception, "Unhandled error");
@@ -78,12 +85,30 @@ public static class SecurityMiddleware
         await next();
     });
 
+    // Scripts only from this site. The one hash allows the onload="this.media='all'" handler Angular adds when it
+    // inlines critical CSS. Styles allow inline because Angular injects component styles at run time.
+    private const string ContentSecurityPolicy =
+        "default-src 'self'; script-src 'self' 'unsafe-hashes' 'sha256-MhtPZXr7+LpJUY5qtMutB+qWfQtMaPccfe7QXtCcEYc='; " +
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; " +
+        "worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
     public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder app) => app.Use(async (ctx, next) =>
     {
         ctx.Response.Headers.XContentTypeOptions = "nosniff";
         ctx.Response.Headers["Referrer-Policy"] = "no-referrer";
         ctx.Response.Headers.XFrameOptions = "DENY";
-        ctx.Response.Headers.CacheControl = "no-store";
+        ctx.Response.Headers.ContentSecurityPolicy = ContentSecurityPolicy;
+        ctx.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()";
+        ctx.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
+        // API responses carry personal data: never cache. Static files set their own caching.
+        if (ctx.Request.Path.StartsWithSegments("/api")) ctx.Response.Headers.CacheControl = "no-store";
+        ctx.Response.OnStarting(() =>
+        {
+            // The app shell (index.html, also served for client routes) must be revalidated so a new deploy is picked up.
+            if (ctx.Response.ContentType?.StartsWith("text/html") == true && !ctx.Response.Headers.ContainsKey("Cache-Control"))
+                ctx.Response.Headers.CacheControl = "no-cache";
+            return Task.CompletedTask;
+        });
         await next();
     });
 }

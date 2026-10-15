@@ -54,18 +54,32 @@ public sealed class ScheduleService(
         var clinic = await scope.ClinicAsync(ct);
         await ValidateAsync(r, ct);
 
+        // Every shift starts as a draft. A caller asking for "published" (Undo of a published shift) gets it only if
+        // the licence check passes, so no path publishes around the block and the owner override.
         var shift = new Shift
         {
             ClinicId = user.ClinicId, LocationId = r.LocationId, StaffId = r.StaffId, ShiftDate = r.ShiftDate,
             StartTime = r.StartTime, EndTime = r.EndTime, UnpaidBreakMinutes = r.UnpaidBreakMinutes ?? clinic.DefaultBreakMinutes,
-            IsPublished = r.IsPublished == true, UpdatedAtUtc = clock.UtcNow,
+            IsPublished = false, UpdatedAtUtc = clock.UtcNow,
         };
         db.Shifts.Add(shift);
-        if (shift.IsPublished)
-            await notifier.NotifyAsync([shift.StaffId], "schedule_changed", $"You have a new shift on {shift.ShiftDate:ddd, MMM d}.", ct);
         await db.SaveChangesAsync(ct);
+        if (r.IsPublished == true && !await HasLicenceBlockAsync(shift, ct))
+        {
+            shift.IsPublished = true;
+            await notifier.NotifyAsync([shift.StaffId], "schedule_changed", $"You have a new shift on {shift.ShiftDate:ddd, MMM d}.", ct);
+            await db.SaveChangesAsync(ct);
+        }
         analytics.Track("shift_created");
         return await WeekForAsync(shift.LocationId, shift.ShiftDate, ct);
+    }
+
+    /// <summary>True when this shift's person lacks a required, blocking licence on the shift date (and no override applies).</summary>
+    private async Task<bool> HasLicenceBlockAsync(Shift shift, CancellationToken ct)
+    {
+        var weekStart = (await scope.CalendarAsync(ct)).WeekStartFor(shift.ShiftDate);
+        var input = await LoadCheckInputAsync(shift.LocationId, weekStart, ct);
+        return ScheduleChecker.Run(input).Any(i => i.Severity == IssueSeverity.Block && i.ShiftId == shift.ShiftId);
     }
 
     public async Task<ScheduleWeekDto> UpdateAsync(int shiftId, SaveShiftRequest r, CancellationToken ct)
@@ -76,13 +90,27 @@ public sealed class ScheduleService(
         await ValidateAsync(r, ct, ignoreShiftId: shiftId);
 
         var previousStaff = shift.StaffId;
+        var personOrDayChanged = shift.StaffId != r.StaffId || shift.ShiftDate != r.ShiftDate;
         shift.StaffId = r.StaffId;
         shift.ShiftDate = r.ShiftDate;
         shift.StartTime = r.StartTime;
         shift.EndTime = r.EndTime;
         shift.UnpaidBreakMinutes = r.UnpaidBreakMinutes ?? shift.UnpaidBreakMinutes;
         shift.UpdatedAtUtc = clock.UtcNow;
-        if (shift.IsPublished)
+
+        // An owner override was given for one person on one day; it must not follow the shift to someone else.
+        if (personOrDayChanged)
+            db.ScheduleOverrides.RemoveRange(await db.ScheduleOverrides.Where(o => o.ShiftId == shiftId).ToListAsync(ct));
+        await db.SaveChangesAsync(ct);
+
+        var unpublished = false;
+        if (shift.IsPublished && personOrDayChanged && await HasLicenceBlockAsync(shift, ct))
+        {
+            // A published shift now breaks the licence rule: take it back to draft so it goes through publish again.
+            shift.IsPublished = false;
+            unpublished = true;
+        }
+        if (shift.IsPublished || unpublished)
             await notifier.NotifyAsync([previousStaff, shift.StaffId], "schedule_changed", $"A published shift on {shift.ShiftDate:ddd, MMM d} was changed. Check your schedule.", ct);
         await db.SaveChangesAsync(ct);
         return await WeekForAsync(shift.LocationId, shift.ShiftDate, ct);
@@ -103,7 +131,18 @@ public sealed class ScheduleService(
     {
         access.RequireManagesLocation(r.LocationId);
         await RequireLocationAsync(r.LocationId, ct);
+        new Validator().Date(r.WeekStart, "weekStart", "week").ThrowIfInvalid();
         var weekStart = (await scope.CalendarAsync(ct)).WeekStartFor(r.WeekStart);
+        // One publish per location and week at a time, so a double click cannot log the same override twice.
+        return await db.InTransactionAsync(async () =>
+        {
+            await db.AcquireLockAsync($"week:{r.LocationId}:{weekStart:yyyyMMdd}", ct);
+            return await PublishWeekAsync(r, weekStart, ct);
+        }, ct);
+    }
+
+    private async Task<PublishResult> PublishWeekAsync(PublishRequest r, DateOnly weekStart, CancellationToken ct)
+    {
         var input = await LoadCheckInputAsync(r.LocationId, weekStart, ct);
         var blocks = ScheduleChecker.Run(input).Where(i => i.Severity == IssueSeverity.Block).ToList();
 
@@ -112,8 +151,7 @@ public sealed class ScheduleService(
         {
             if (!access.IsOwner)
                 throw new ConflictException("Publishing is blocked by an expired required licence. Ask the Owner / Admin to review and override it, or change the shift.");
-            if (string.IsNullOrWhiteSpace(r.OverrideReason) || r.OverrideReason.Trim().Length > 300)
-                throw ValidationException.For("overrideReason", "Enter a reason for the override, up to 300 characters.");
+            new Validator().Text(r.OverrideReason, "overrideReason", "a reason for the override", 300, multiline: true).ThrowIfInvalid();
 
             foreach (var b in blocks)
                 db.ScheduleOverrides.Add(new ScheduleOverride
@@ -146,7 +184,18 @@ public sealed class ScheduleService(
     {
         access.RequireManagesLocation(r.LocationId);
         await RequireLocationAsync(r.LocationId, ct);
+        new Validator().Date(r.WeekStart, "weekStart", "week").ThrowIfInvalid();
         var weekStart = (await scope.CalendarAsync(ct)).WeekStartFor(r.WeekStart);
+        // Two clicks on "Fill week" run one after the other; the second finds the days filled and adds nothing.
+        return await db.InTransactionAsync(async () =>
+        {
+            await db.AcquireLockAsync($"week:{r.LocationId}:{weekStart:yyyyMMdd}", ct);
+            return await FillWeekAsync(r, weekStart, ct);
+        }, ct);
+    }
+
+    private async Task<FillResult> FillWeekAsync(WeekRequest r, DateOnly weekStart, CancellationToken ct)
+    {
         var weekEnd = weekStart.AddDays(6);
 
         var patterns = await db.WorkPatterns.AsNoTracking().Include(p => p.Days)
@@ -281,6 +330,7 @@ public sealed class ScheduleService(
     private async Task ValidateAsync(SaveShiftRequest r, CancellationToken ct, int? ignoreShiftId = null)
     {
         var v = new Validator()
+            .Date(r.ShiftDate, "shiftDate", "date")
             .Require(r.EndTime > r.StartTime, "endTime", "End time must be after the start time.")
             .Require(r.UnpaidBreakMinutes is null or (>= 0 and <= 120), "unpaidBreakMinutes", "Break must be between 0 and 120 minutes.");
         var staff = await db.Staff.AsNoTracking().SingleOrDefaultAsync(s => s.StaffId == r.StaffId, ct);

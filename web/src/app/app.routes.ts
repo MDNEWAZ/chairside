@@ -17,7 +17,10 @@ export const routes: Routes = [
       { path: 'leave', title: 'Leave · Chairside', loadComponent: () => import('./features/leave').then((m) => m.Leave) },
       { path: 'attendance', title: 'Attendance · Chairside', canActivate: [managersOnly], loadComponent: () => import('./features/attendance').then((m) => m.Attendance) },
       { path: 'staff', title: 'Staff · Chairside', loadComponent: () => import('./features/staff').then((m) => m.StaffList) },
-      { path: 'staff/:id', title: 'Staff member · Chairside', loadComponent: () => import('./features/staff').then((m) => m.StaffEdit) },
+      {
+        path: 'staff/:id', title: 'Staff member · Chairside', loadComponent: () => import('./features/staff').then((m) => m.StaffEdit),
+        canDeactivate: [(page: { canLeave(): Promise<boolean> }) => page.canLeave()],
+      },
       { path: 'settings', title: 'Settings · Chairside', canActivate: [ownerOnly], loadComponent: () => import('./features/settings').then((m) => m.Settings) },
       { path: 'audit', title: 'Audit log · Chairside', canActivate: [ownerOnly], loadComponent: () => import('./features/audit').then((m) => m.Audit) },
     ],

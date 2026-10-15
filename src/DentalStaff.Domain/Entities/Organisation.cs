@@ -23,6 +23,8 @@ public class UserAccount
     public string Email { get; set; } = "";
     public string PasswordHash { get; set; } = "";
     public DateTime? LastLoginUtc { get; set; }
+    /// <summary>Changed to sign the person out everywhere (logout, deactivation).</summary>
+    public Guid SecurityStamp { get; set; } = Guid.NewGuid();
 }
 
 public class Location
@@ -70,6 +72,9 @@ public class Invitation
     public string TokenHash { get; set; } = "";
     public DateTime ExpiresUtc { get; set; }
     public DateTime? AcceptedUtc { get; set; }
+    /// <summary>The address the link was sent to; accepting requires it to still be the person's email.</summary>
+    public string? Email { get; set; }
+    public DateTime? RevokedUtc { get; set; }
 }
 
 public class Notification

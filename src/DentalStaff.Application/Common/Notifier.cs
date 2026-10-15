@@ -10,6 +10,8 @@ public sealed class Notifier(IAppDbContext db, IEmailSender email, ICurrentUser 
     {
         var ids = staffIds.Distinct().ToList();
         if (ids.Count == 0) return;
+        // The column holds 300 characters; long names or comments are shortened rather than failing the whole action.
+        if (message.Length > 300) message = message[..297] + "...";
 
         foreach (var id in ids)
             db.Notifications.Add(new Notification { ClinicId = user.ClinicId, RecipientStaffId = id, Type = type, Message = message });

@@ -12,6 +12,7 @@ public static class ClaimNames
     public const string UserId = "uid";
     public const string StaffId = "sid";
     public const string HomeLocationId = "loc";
+    public const string SecurityStamp = "stm";
 }
 
 public sealed class CurrentUser(IHttpContextAccessor accessor) : ICurrentUser
@@ -38,17 +39,20 @@ public static class AuthSetup
         new Claim(ClaimNames.StaffId, u.StaffId.ToString()),
         new Claim(ClaimTypes.Role, u.Role),
         new Claim(ClaimNames.HomeLocationId, u.HomeLocationId.ToString()),
+        new Claim(ClaimNames.SecurityStamp, u.SecurityStamp.ToString()),
     ], CookieAuthenticationDefaults.AuthenticationScheme));
 
-    public static IServiceCollection AddCookieAuth(this IServiceCollection services, IHostEnvironment env)
+    public static IServiceCollection AddCookieAuth(this IServiceCollection services, bool requireHttps)
     {
         services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(o =>
             {
-                o.Cookie.Name = "chairside.auth";
+                // The __Host- prefix makes browsers refuse the cookie unless it is Secure, host-only and path "/".
+                o.Cookie.Name = requireHttps ? "__Host-chairside.auth" : "chairside.auth";
+                o.Cookie.Path = "/";
                 o.Cookie.HttpOnly = true;
                 o.Cookie.SameSite = SameSiteMode.Strict;
-                o.Cookie.SecurePolicy = env.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+                o.Cookie.SecurePolicy = requireHttps ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
                 o.ExpireTimeSpan = TimeSpan.FromHours(10);
                 o.SlidingExpiration = true;
                 // An API answers with status codes, never redirects to a login page.
@@ -66,14 +70,15 @@ public static class AuthSetup
     private static async Task ValidateAsync(CookieValidatePrincipalContext ctx)
     {
         var p = ctx.Principal!;
-        if (!Guid.TryParse(p.FindFirstValue(ClaimNames.ClinicId), out var clinicId) || !int.TryParse(p.FindFirstValue(ClaimNames.UserId), out var userId))
+        if (!Guid.TryParse(p.FindFirstValue(ClaimNames.ClinicId), out var clinicId) || !int.TryParse(p.FindFirstValue(ClaimNames.UserId), out var userId)
+            || !Guid.TryParse(p.FindFirstValue(ClaimNames.SecurityStamp), out var stamp))
         {
             ctx.RejectPrincipal();
             return;
         }
 
         var auth = ctx.HttpContext.RequestServices.GetRequiredService<AuthService>();
-        var fresh = await auth.RefreshAsync(clinicId, userId, ctx.HttpContext.RequestAborted);
+        var fresh = await auth.RefreshAsync(clinicId, userId, stamp, ctx.HttpContext.RequestAborted);
         if (fresh is null)
         {
             ctx.RejectPrincipal();

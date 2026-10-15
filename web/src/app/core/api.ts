@@ -97,6 +97,7 @@ export class Api {
   myLeave = () => this.http.get<M.MyLeave>('/api/leave/mine');
   previewLeave = (d: M.LeaveDraft) => this.http.post<{ daysCounted: number; balance: M.LeaveBalance }>('/api/leave/preview', d);
   requestLeave = (d: M.LeaveDraft) => this.http.post<M.MyLeave>('/api/leave', d);
+  cancelLeave = (id: number) => this.http.delete<M.MyLeave>(`/api/leave/${id}`);
   inbox = () => this.http.get<M.InboxItem[]>('/api/leave/inbox');
   decide = (id: number, approve: boolean, comment: string | null) => this.http.post<M.InboxItem[]>(`/api/leave/${id}/decide`, { approve, comment });
 

@@ -9,8 +9,21 @@ public sealed class ClinicCalendar(string timeZoneId, DayOfWeek workweekStart)
 
     public DateTime ToLocal(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), _zone);
 
-    public DateTime ToUtc(DateOnly date, TimeOnly time) =>
-        TimeZoneInfo.ConvertTimeToUtc(date.ToDateTime(time, DateTimeKind.Unspecified), _zone);
+    /// <summary>
+    /// Clinic-local date and time to UTC. A time skipped by a daylight-saving jump does not exist and throws
+    /// <see cref="NonexistentLocalTimeException"/>; a repeated (ambiguous) time is read as the first, daylight occurrence.
+    /// </summary>
+    public DateTime ToUtc(DateOnly date, TimeOnly time)
+    {
+        var local = date.ToDateTime(time, DateTimeKind.Unspecified);
+        if (_zone.IsInvalidTime(local)) throw new NonexistentLocalTimeException(date, time);
+        if (_zone.IsAmbiguousTime(local))
+        {
+            var daylight = _zone.GetAmbiguousTimeOffsets(local).Max();
+            return DateTime.SpecifyKind(local - daylight, DateTimeKind.Utc);
+        }
+        return TimeZoneInfo.ConvertTimeToUtc(local, _zone);
+    }
 
     public DateOnly Today(DateTime utcNow) => DateOnly.FromDateTime(ToLocal(utcNow));
 
@@ -23,6 +36,9 @@ public sealed class ClinicCalendar(string timeZoneId, DayOfWeek workweekStart)
     public static bool IsValidZone(string timeZoneId) =>
         TimeZoneInfo.TryFindSystemTimeZoneById(timeZoneId, out _);
 }
+
+public sealed class NonexistentLocalTimeException(DateOnly date, TimeOnly time)
+    : Exception($"{time:HH:mm} does not exist on {date:yyyy-MM-dd}: the clocks moved forward.");
 
 /// <summary>US federal holidays, used to prefill a clinic's closed days.</summary>
 public static class UsFederalHolidays

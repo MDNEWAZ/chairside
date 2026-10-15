@@ -6,10 +6,12 @@ import { addDays, compactTime, day, hours, monthDay, time, toHHmm, todayIn, week
 import { Issue, SaveShift, ScheduleWeek, Shift } from '../core/models';
 import { Session } from '../core/session';
 import { Toasts } from '../core/toast';
+import { Confirm } from '../core/confirm';
 import { Avatar, jobClass } from '../shared/brand';
 import { Icon } from '../shared/icons';
 import { Badge, ErrorState, Mutation, PageHeader, Sheet, focusFirstError } from '../shared/ui';
 import { ScrollRegion } from '../shared/scroll-region';
+import { TabList } from '../shared/tablist';
 
 interface EditState { shiftId: number | null; staffId: number; shiftDate: string; startTime: string; endTime: string; unpaidBreakMinutes: number | null }
 
@@ -24,7 +26,7 @@ const DAY_END = 19 * 60;    // to 7:00 PM
 @Component({
   selector: 'app-schedule',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, PageHeader, Badge, ErrorState, Sheet, Icon, Avatar, ScrollRegion],
+  imports: [FormsModule, PageHeader, Badge, ErrorState, Sheet, Icon, Avatar, ScrollRegion, TabList],
   styles: `
     .shift { border-left: 3px solid var(--job); background: var(--job-bg); }
     .shift.draft { background: var(--c-surface); background-image: var(--c-draft); }
@@ -643,14 +645,27 @@ export class Schedule implements OnInit {
     this.toasts.show(r.created === 0 ? 'Nothing to add: everyone with a pattern already has a shift or is off.' : `${r.created} draft shift${r.created === 1 ? '' : 's'} added from work patterns.`);
   }
 
-  protected startPublish(): void {
+  private readonly confirm = inject(Confirm);
+
+  protected async startPublish(): Promise<void> {
     if (this.blocks().length > 0) {
       this.overrideReason = '';
       this.pm.reset();
       this.publishSheet().open();
-    } else {
-      void this.publish(false);
+      return;
     }
+    // Publishing notifies everyone, so say what goes out and which warnings are being accepted.
+    const w = this.week()!;
+    const warnings = w.issues.filter((i) => i.severity !== 'Block').map((i) => i.message);
+    const answer = await this.confirm.ask({
+      title: `Publish ${w.draftCount} shift${w.draftCount === 1 ? '' : 's'}?`,
+      body: warnings.length
+        ? `Staff at ${this.session.locationName(w.locationId)} are notified. These warnings stay open:`
+        : `Staff at ${this.session.locationName(w.locationId)} are notified straight away. All checks pass.`,
+      confirmLabel: 'Publish and notify',
+      details: warnings.length > 8 ? [...warnings.slice(0, 8), `and ${warnings.length - 8} more`] : warnings,
+    });
+    if (answer.confirmed) void this.publish(false);
   }
 
   protected async publish(withOverride: boolean): Promise<void> {

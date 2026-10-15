@@ -31,6 +31,9 @@ public interface IAppDbContext
     Task<int> ClockOutAsync(int attendanceId, CancellationToken cancellationToken);
 
     Task<T> InTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken);
+
+    /// <summary>Serialises competing requests for one resource (e.g. one person's clock-in) until the transaction ends.</summary>
+    Task AcquireLockAsync(string resource, CancellationToken cancellationToken);
 }
 
 /// <summary>

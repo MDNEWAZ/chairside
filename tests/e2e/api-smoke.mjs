@@ -20,7 +20,7 @@ class Client {
     if (this.cookie) headers.Cookie = this.cookie;
     const res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), redirect: 'manual' });
     const set = res.headers.getSetCookie?.() ?? [];
-    for (const c of set) if (c.startsWith('chairside.auth=')) this.cookie = c.split(';')[0];
+    for (const c of set) if (/^(__Host-)?chairside\.auth=/.test(c)) this.cookie = c.split(';')[0];
     const text = await res.text();
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
@@ -200,7 +200,7 @@ check('D11 request in manager inbox with impact list', !!item && Array.isArray(i
 expectStatus('D12 hygienist cannot decide', await hygienist.post(`/leave/${req.leaveRequestId}/decide`, { approve: true }), 403);
 r = await manager.post(`/leave/${req.leaveRequestId}/decide`, { approve: true, comment: 'Have a good conference' });
 expectStatus('D13 manager approves', r, 200);
-expectStatus('D14 deciding twice is 409', await manager.post(`/leave/${req.leaveRequestId}/decide`, { approve: false }), 409);
+expectStatus('D14 deciding twice is 409', await manager.post(`/leave/${req.leaveRequestId}/decide`, { approve: false, comment: 'Sorry' }), 409);
 const after = (await hygienist.get('/leave/mine')).body;
 check('D15 approved leave reduces balance', after.balance.used === balBefore.used + 4.5 && after.requests.find((x) => x.leaveRequestId === req.leaveRequestId)?.decidedBy === 'Jordan Lee');
 const mgrLeave = await manager.post('/leave', { startDate: addDays(leaveMon, 7), endDate: addDays(leaveMon, 7), firstDayHalf: false, lastDayHalf: false, leaveType: 'annual', note: null });
@@ -209,10 +209,28 @@ check('D16 manager request is pending', mgrReq?.status === 'pending');
 check('D17 manager does not see own request in inbox', !(await manager.get('/leave/inbox')).body.some((i) => i.request.leaveRequestId === mgrReq.leaveRequestId));
 check('D18 owner sees manager request', (await owner.get('/leave/inbox')).body.some((i) => i.request.leaveRequestId === mgrReq.leaveRequestId));
 expectStatus('D19 manager cannot decide own leave', await manager.post(`/leave/${mgrReq.leaveRequestId}/decide`, { approve: true }), 403);
-// The owner has no work pattern, so give her a shift first, then her own leave is recorded as approved.
-await owner.post('/schedule/shifts', { locationId: loc.Downtown, staffId: owner.me.staffId, shiftDate: addDays(leaveMon, 21), startTime: '09:00', endTime: '12:00', unpaidBreakMinutes: 0 });
+// The owner has no work pattern, so give them a published shift first (leave counts published shifts), then their own leave is recorded as approved.
+await owner.post('/schedule/shifts', { locationId: loc.Downtown, staffId: owner.me.staffId, shiftDate: addDays(leaveMon, 21), startTime: '09:00', endTime: '12:00', unpaidBreakMinutes: 0, isPublished: true });
 r = await owner.post('/leave', { startDate: addDays(leaveMon, 21), endDate: addDays(leaveMon, 21), firstDayHalf: false, lastDayHalf: false, leaveType: 'other', note: null });
 check('D20 sole owner leave auto-approved', r.status === 200 && r.body.requests[0]?.status === 'approved', JSON.stringify(r.body).slice(0, 200));
+// Withdrawing, and rejecting with a reason.
+r = await reception.post('/leave', { startDate: addDays(leaveMon, 28), endDate: addDays(leaveMon, 28), firstDayHalf: false, lastDayHalf: false, leaveType: 'sick', note: null });
+const recReq = r.body?.requests?.find((x) => x.startDate === addDays(leaveMon, 28));
+check('D22 reception request is pending', recReq?.status === 'pending', JSON.stringify(r.body).slice(0, 200));
+r = await hygienist.del(`/leave/${recReq.leaveRequestId}`);
+expectStatus('D23 cannot withdraw someone else\'s request', r, 404);
+r = await reception.del(`/leave/${recReq.leaveRequestId}`);
+check('D24 own pending request withdrawn', r.status === 200 && !r.body.requests.some((x) => x.leaveRequestId === recReq.leaveRequestId));
+expectStatus('D25 cannot withdraw a decided request', await hygienist.del(`/leave/${req.leaveRequestId}`), 409);
+r = await reception.post('/leave', { startDate: addDays(leaveMon, 29), endDate: addDays(leaveMon, 29), firstDayHalf: false, lastDayHalf: false, leaveType: 'sick', note: null });
+const recReq2 = r.body.requests.find((x) => x.startDate === addDays(leaveMon, 29));
+r = await manager.post(`/leave/${recReq2.leaveRequestId}/decide`, { approve: false, comment: '' });
+check('D26 rejecting needs a reason', r.status === 400 && !!r.body?.errors?.comment);
+expectStatus('D27 reject with a reason', await manager.post(`/leave/${recReq2.leaveRequestId}/decide`, { approve: false, comment: 'Two others are off that day' }), 200);
+const bal = (await hygienist.get('/leave/mine')).body.balance;
+r = await hygienist.post('/leave', { startDate: addDays(leaveMon, 35), endDate: addDays(leaveMon, 35 + 55), firstDayHalf: false, lastDayHalf: false, leaveType: 'annual', note: null });
+check('D28 annual leave beyond the allowance is refused', r.status === 400 && JSON.stringify(r.body).includes('left for'), `balance ${JSON.stringify(bal)} -> ${r.status} ${JSON.stringify(r.body).slice(0, 160)}`);
+expectStatus('D29 team leave range over 120 days is 400', await reception.get(`/leave/team?from=2026-01-01&to=2026-12-31`), 400);
 const team = (await reception.get(`/leave/team?from=${leaveMon}&to=${addDays(leaveMon, 4)}`)).body;
 check('D21 reception sees team leave dates only', team.some((t) => t.staffName === 'Grace Kim') && team.every((t) => t.leaveType === 'leave' && t.note === null));
 
@@ -250,6 +268,12 @@ check('E17 corrected record is no longer missing and break is 0', r.body.missing
 r = await manager.post(`/attendance/${unsched.attendanceId}/confirm`);
 check('E18 confirm unscheduled', r.status === 200 && r.body.unscheduledConfirmed === true);
 expectStatus('E19 confirming a scheduled record is 409', await manager.post(`/attendance/${missing.attendanceId}/confirm`), 409);
+r = await manager.put(`/attendance/${missing.attendanceId}`, { clockInDate: '2026-03-08', clockInTime: '02:30', clockOutDate: '2026-03-08', clockOutTime: '09:00', unpaidBreakMinutes: 0, note: 'DST probe' });
+check('E21 a time skipped by the daylight-saving change is a field error', r.status === 400 && !!r.body?.errors?.clockInTime, JSON.stringify(r.body).slice(0, 200));
+r = await manager.put(`/attendance/${missing.attendanceId}`, { clockInDate: inDate, clockInTime: '07:56', clockOutDate: null, clockOutTime: null, unpaidBreakMinutes: 0, note: 'Reopen' });
+check('E22 a past day cannot be left without a clock-out', r.status === 400 && !!r.body?.errors?.clockOutTime, JSON.stringify(r.body).slice(0, 200));
+const ownerRec = att.find((a) => a.staffId === owner.me.staffId);
+if (ownerRec) expectStatus('E23 manager cannot correct the owner\'s attendance', await manager.put(`/attendance/${ownerRec.attendanceId}`, { clockInDate: ownerRec.clockInUtc.split('T')[0], clockInTime: '08:00', clockOutDate: ownerRec.clockInUtc.split('T')[0], clockOutTime: '09:00', unpaidBreakMinutes: 0, note: 'x' }), 403);
 if (own) expectStatus('E20 manager cannot correct own record', await manager.put(`/attendance/${own.attendanceId}`, { clockInDate: inDate, clockInTime: '08:00', clockOutDate: inDate, clockOutTime: '16:00', unpaidBreakMinutes: 30, note: 'x' }), 403);
 else check('E20 manager has a seeded own record', false);
 
@@ -275,21 +299,16 @@ r = await manager.post(`/staff/${created.staffId}/credentials`, { credentialType
 check('F9 add credential, shows expiring', r.status === 200 && r.body.credentials[0]?.status === 'expiring');
 r = await manager.del(`/staff/${created.staffId}/credentials/${r.body.credentials[0].credentialId}`);
 check('F10 remove credential', r.status === 200 && r.body.credentials.length === 0);
-r = await owner.post(`/staff/${created.staffId}/invite`);
-expectStatus('F11 owner invites', r, 200);
-const token = r.body.acceptUrlPath.split('/').pop();
-const invitee = new Client();
-expectStatus('F12 short password is 400', await invitee.post('/auth/invite', { token, password: 'short' }), 400);
-expectStatus('F13 bad token is 404', await invitee.post('/auth/invite', { token: 'nope', password: 'long enough password' }), 404);
-r = await invitee.post('/auth/invite', { token, password: 'long enough password' });
-check('F14 invite accepted and signed in', r.status === 200 && r.body.email === newStaff.email);
-expectStatus('F15 token cannot be reused', await new Client().post('/auth/invite', { token, password: 'long enough password' }), 404);
-const relogin = new Client();
-expectStatus('F16 new user can sign in with the password', await relogin.post('/auth/login', { email: newStaff.email, password: 'long enough password' }), 200);
+expectStatus('F11 invitations are off in the demo clinic', await owner.post(`/staff/${created.staffId}/invite`), 409);
+expectStatus('F12 demo sign-in people cannot be deactivated', await owner.post(`/staff/${hygienist.me.staffId}/deactivate`), 409);
+expectStatus('F13 a manager cannot change their own credentials', await manager.post(`/staff/${manager.me.staffId}/credentials`, { credentialTypeId: lookups.credentialTypes[0].id, expiresOn: '2030-01-01' }), 403);
+expectStatus('F14 a manager cannot change the owner\'s credentials', await manager.post(`/staff/${sid('Maya')}/credentials`, { credentialTypeId: lookups.credentialTypes[0].id, expiresOn: '2030-01-01' }), 403);
+r = await manager.put(`/staff/${hygienist.me.staffId}`, { firstName: 'Grace', lastName: 'Kim', email: 'grace.new@brightsmiles.test', phone: null, jobTitleId: titles['Hygienist'], homeLocationId: loc.Downtown, startDate: '2024-01-01', overtimeEligible: true, employmentType: 'full_time', pattern: [] });
+check('F15 the sign-in email of an account cannot be changed', r.status === 400 && !!r.body?.errors?.email, JSON.stringify(r.body).slice(0, 200));
+expectStatus('F16 control characters in names are refused', await manager.post('/staff', { ...newStaff, email: 'rtl@brightsmiles.test', firstName: 'Evil\u202Ename' }), 400);
+expectStatus('F16b a display-name email is refused', await manager.post('/staff', { ...newStaff, email: 'Test <t2@brightsmiles.test>' }), 400);
 r = await manager.post(`/staff/${created.staffId}/deactivate`);
 check('F17 deactivate keeps the record', r.status === 200 && r.body.isActive === false);
-expectStatus('F18 deactivated session is rejected at once', await relogin.get('/auth/me'), 401);
-expectStatus('F19 deactivated user cannot sign in', await new Client().post('/auth/login', { email: newStaff.email, password: 'long enough password' }), 400);
 check('F20 hidden from default directory', !(await manager.get('/staff?search=Test&includeInactive=false')).body.some((s) => s.staffId === created.staffId));
 check('F21 visible with "show deactivated"', (await manager.get('/staff?search=Test&includeInactive=true')).body.some((s) => s.staffId === created.staffId));
 expectStatus('F22 reactivate', await manager.post(`/staff/${created.staffId}/reactivate`), 200);
@@ -314,13 +333,8 @@ const cd = r.body.find((c) => c.name === 'Staff training day');
 check('G7 closed day added', r.status === 200 && !!cd);
 r = await owner.del(`/clinic/closed-days/${cd.closedDayId}`);
 check('G8 closed day removed', r.status === 200 && !r.body.some((c) => c.closedDayId === cd.closedDayId));
-r = await owner.post('/clinic/billing/plan', { planCode: 'starter' });
-expectStatus('G9 starter refused with 2 locations', r, 400);
-r = await owner.post('/clinic/locations', { name: 'Hillcrest', address: null });
-check('G10 third location allowed on Practice', r.status === 200 && r.body.locations.length === 3);
-r = await owner.post('/clinic/locations', { name: 'Fourth' });
-expectStatus('G11 fourth location blocked by plan', r, 400);
-expectStatus('G12 duplicate location name 400', await owner.post('/clinic/locations', { name: 'Downtown' }), 400);
+expectStatus('G9 the demo clinic plan cannot be changed', await owner.post('/clinic/billing/plan', { planCode: 'starter' }), 409);
+expectStatus('G10 locations cannot be added to the demo clinic', await owner.post('/clinic/locations', { name: 'Hillcrest', address: null }), 400);
 const billing = (await owner.get('/clinic/billing')).body;
 check('G13 billing is simulated and counts seats', billing.simulated === true && billing.activeStaff >= 17 && billing.monthlyEstimate === billing.activeStaff * 6);
 r = await owner.get('/clinic/export');
@@ -348,10 +362,65 @@ const otherDir = (await other.get('/staff?search=&includeInactive=true')).body;
 check('I2 new clinic sees only its owner', otherDir.length === 1);
 expectStatus('I3 cannot read demo staff', await other.get(`/staff/${sid('Grace')}`), 404);
 expectStatus('I4 cannot edit demo shift', await other.put(`/schedule/shifts/${thisWeek.shifts[0].shiftId}`, { locationId: (await other.get('/clinic/lookups')).body.locations[0].id, staffId: other.me?.staffId ?? 0, shiftDate: '2030-01-07', startTime: '08:00', endTime: '12:00' }), 404);
-expectStatus('I5 cannot decide demo leave', await other.post(`/leave/${req.leaveRequestId}/decide`, { approve: false }), 404);
+expectStatus('I5 cannot decide demo leave', await other.post(`/leave/${req.leaveRequestId}/decide`, { approve: false, comment: 'x' }), 404);
 expectStatus('I6 cannot view demo location schedule', await other.get(`/schedule?locationId=${loc.Downtown}`), 404);
 check('I7 audit shows no demo rows', (await other.get('/audit?entity=&page=0')).body.every((a) => !JSON.stringify(a).includes('Bright Smiles')));
 expectStatus('I8 duplicate signup email 400', await new Client().post('/auth/signup', { clinicName: 'X', firstName: 'A', lastName: 'B', email: owner.me.email, password: 'long enough password', timeZoneId: 'America/Chicago', locationNames: ['Main'] }), 400);
+
+// ---------- L. Invitations, passwords and sessions (in the fresh clinic, since the demo has invites off) ----------
+const otherLoc = (await other.get('/clinic/lookups')).body;
+const otherTitle = otherLoc.jobTitles.find((j) => j.role === 'clinical_staff').id;
+const stamp = Date.now();
+const person = (first, email) => ({ firstName: first, lastName: 'Invitee', email, phone: null, jobTitleId: otherTitle, homeLocationId: otherLoc.locations[0].id, startDate: '2026-01-05', overtimeEligible: true, employmentType: 'full_time', pattern: [] });
+const invEmail = `ivy${stamp}@test.test`;
+const ivy = (await other.post('/staff', person('Ivy', invEmail))).body;
+r = await other.post(`/staff/${ivy.staffId}/invite`);
+expectStatus('L1 owner invites', r, 200);
+const oldToken = r.body.acceptUrlPath.split('/').pop();
+r = await other.post(`/staff/${ivy.staffId}/invite`);
+const token = r.body.acceptUrlPath.split('/').pop();
+expectStatus('L2 a newer invitation replaces the older link', await new Client().post('/auth/invite', { token: oldToken, password: 'blue chair at noon' }), 404);
+const invitee = new Client();
+expectStatus('L3 short password is 400', await invitee.post('/auth/invite', { token, password: 'short' }), 400);
+expectStatus('L4 a well-known password is 400', await invitee.post('/auth/invite', { token, password: 'password123' }), 400);
+expectStatus('L5 bad token is 404', await invitee.post('/auth/invite', { token: 'nope', password: 'blue chair at noon' }), 404);
+r = await invitee.post('/auth/invite', { token, password: 'blue chair at noon' });
+check('L6 invite accepted and signed in', r.status === 200 && r.body.email === invEmail);
+expectStatus('L7 token cannot be reused', await new Client().post('/auth/invite', { token, password: 'blue chair at noon' }), 404);
+expectStatus('L8 a person with an account cannot be invited again', await other.post(`/staff/${ivy.staffId}/invite`), 409);
+// Changing the address after the link was sent makes the link unusable: it cannot be used to take over the profile.
+const jay = (await other.post('/staff', person('Jay', `jay${stamp}@test.test`))).body;
+const jayToken = (await other.post(`/staff/${jay.staffId}/invite`)).body.acceptUrlPath.split('/').pop();
+await other.put(`/staff/${jay.staffId}`, person('Jay', `jay.new${stamp}@test.test`));
+expectStatus('L9 a link sent to an old address no longer works', await new Client().post('/auth/invite', { token: jayToken, password: 'blue chair at noon' }), 404);
+// Sign-out ends a copied session too.
+const deviceA = new Client();
+expectStatus('L10 new user can sign in with the password', await deviceA.post('/auth/login', { email: invEmail, password: 'blue chair at noon' }), 200);
+const deviceB = new Client();
+deviceB.cookie = deviceA.cookie;
+expectStatus('L11 the copied session works before sign-out', await deviceB.get('/auth/me'), 200);
+await deviceA.post('/auth/logout');
+expectStatus('L12 signing out ends every copy of the session', await deviceB.get('/auth/me'), 401);
+const relogin = new Client();
+await relogin.post('/auth/login', { email: invEmail, password: 'blue chair at noon' });
+r = await other.post(`/staff/${ivy.staffId}/deactivate`);
+check('L13 deactivate keeps the record', r.status === 200 && r.body.isActive === false);
+expectStatus('L14 deactivated session is rejected at once', await relogin.get('/auth/me'), 401);
+expectStatus('L15 deactivated user cannot sign in', await new Client().post('/auth/login', { email: invEmail, password: 'blue chair at noon' }), 400);
+r = await new Client().post('/auth/signup', { clinicName: 'Weak', firstName: 'A', lastName: 'B', email: `weak${stamp}@test.test`, password: `weak${stamp}@test.test`, timeZoneId: 'America/Chicago', locationNames: ['Main'] });
+check('L16 the email as a password is refused at sign-up', r.status === 400 && !!r.body?.errors?.password);
+// Plans and locations (in the fresh clinic: the demo's are fixed).
+r = await other.post('/clinic/locations', { name: 'Second', address: null });
+check('L17 second location added', r.status === 200 && r.body.locations.length === 2);
+expectStatus('L18 duplicate location name 400 (any case)', await other.post('/clinic/locations', { name: 'second' }), 400);
+expectStatus('L19 starter refused with 2 locations', await other.post('/clinic/billing/plan', { planCode: 'starter' }), 400);
+await other.post('/clinic/locations', { name: 'Third' });
+expectStatus('L20 fourth location blocked by plan', await other.post('/clinic/locations', { name: 'Fourth' }), 400);
+r = await other.post('/clinic/billing/plan', { planCode: 'practice' });
+check('L21 plan change is simulated', r.status === 200 && r.body.planCode === 'practice' && r.body.simulated === true);
+// Per-account lockout: five wrong passwords lock that account even from different clients.
+const lockEmail = `lock${stamp}@test.test`;
+await new Client().post('/auth/signup', { clinicName: 'Lock Test', firstName: 'L', lastName: 'T', email: lockEmail, password: 'blue chair at noon', timeZoneId: 'America/Chicago', locationNames: ['Main'] });
 
 // ---------- K. Malformed input gets field errors, never internal type names ----------
 r = await manager.post(`/staff/${sid('Grace')}/credentials`, { credentialTypeId: 1, expiresOn: '' });
@@ -364,9 +433,14 @@ check('K4 no response leaks .NET type names', !JSON.stringify((await manager.pos
 
 // ---------- J. Security headers and rate limit (last: it locks auth for this IP for a minute) ----------
 r = await owner.get('/clinic/settings');
-check('J1 security headers', r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('x-frame-options') === 'DENY' && r.headers.get('cache-control') === 'no-store');
+check('J1 security headers', r.headers.get('x-content-type-options') === 'nosniff' && r.headers.get('x-frame-options') === 'DENY' && r.headers.get('cache-control') === 'no-store'
+  && r.headers.get('content-security-policy')?.includes("frame-ancestors 'none'") && !!r.headers.get('permissions-policy'));
+const lockCodes = [];
+for (let i = 0; i < 6; i++) lockCodes.push((await new Client().post('/auth/login', { email: lockEmail, password: 'wrong guess here' })).status);
+const afterLock = await new Client().post('/auth/login', { email: lockEmail, password: 'blue chair at noon' });
+check('J3 an account locks after five wrong passwords, even with the right one', afterLock.status === 409 || afterLock.status === 429, `${lockCodes.join(',')} then ${afterLock.status}`);
 const codes = [];
-for (let i = 0; i < 40 && !codes.includes(429); i++) codes.push((await new Client().post('/auth/login', { email: 'x@y.z', password: 'wrong password' })).status);
+for (let i = 0; i < 90 && !codes.includes(429); i++) codes.push((await new Client().post('/auth/login', { email: 'x@y.z', password: 'wrong password' })).status);
 check('J2 auth rate limit returns 429', codes.includes(429), codes.join(','));
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

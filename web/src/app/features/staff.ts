@@ -8,6 +8,7 @@ import { day, time, todayIn } from '../core/format';
 import { InviteResult, ROLE_LABEL, StaffDetail, StaffInput, WEEKDAYS, Weekday } from '../core/models';
 import { Session } from '../core/session';
 import { Toasts } from '../core/toast';
+import { Confirm } from '../core/confirm';
 import { Badge, ErrorState, Loader, Mutation, PageHeader, focusFirstError } from '../shared/ui';
 import { ScrollRegion } from '../shared/scroll-region';
 import { Avatar, jobClass } from '../shared/brand';
@@ -100,6 +101,8 @@ interface PatternRow { weekday: Weekday; works: boolean; shiftDefinitionId: numb
   selector: 'app-staff-edit',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, RouterLink, PageHeader, Badge, ErrorState, Avatar, Icon, ScrollRegion],
+  // The browser's own prompt covers closing the tab or reloading with unsaved edits.
+  host: { '(window:beforeunload)': 'onBeforeUnload($event)' },
   template: `
     <app-page-header [title]="isNew() ? 'Add staff member' : (detail()?.firstName ?? '') + ' ' + (detail()?.lastName ?? '')"
                      [subtitle]="isNew() ? 'Their work pattern decides which days count when they take leave.' : roleText()">
@@ -136,8 +139,10 @@ interface PatternRow { weekday: Weekday; works: boolean; shiftDefinitionId: numb
             <input id="last" class="input" name="lastName" [(ngModel)]="form.lastName" autocomplete="off" [attr.aria-invalid]="!!f()['lastName'] || null">
             @if (f()['lastName']; as e) { <p class="field-error">{{ e }}</p> }</div>
           <div class="field"><label class="label" for="email">Work email</label>
-            <input id="email" class="input" type="email" name="email" [(ngModel)]="form.email" autocomplete="off" [attr.aria-invalid]="!!f()['email'] || null">
-            @if (f()['email']; as e) { <p class="field-error">{{ e }}</p> }</div>
+            <input id="email" class="input" type="email" name="email" maxlength="256" [(ngModel)]="form.email" autocomplete="off" [readonly]="!!detail()?.hasAccount"
+                   [attr.aria-invalid]="!!f()['email'] || null" [attr.aria-describedby]="f()['email'] ? 'email-error' : detail()?.hasAccount ? 'email-help' : null">
+            @if (f()['email']; as e) { <p id="email-error" class="field-error">{{ e }}</p> }
+            @else if (detail()?.hasAccount) { <p id="email-help" class="help">They sign in with this address, so it cannot be changed here.</p> }</div>
           <div class="field"><label class="label" for="phone">Phone (optional)</label>
             <input id="phone" class="input" type="tel" name="phone" [(ngModel)]="form.phone" autocomplete="off" [attr.aria-invalid]="!!f()['phone'] || null">
             @if (f()['phone']; as e) { <p class="field-error">{{ e }}</p> }</div>
@@ -211,7 +216,7 @@ interface PatternRow { weekday: Weekday; works: boolean; shiftDefinitionId: numb
                   <span><span class="font-medium">{{ c.name }}</span>{{ c.required ? '' : ' (not required for this job)' }}
                     <span class="block text-sm text-muted">Expires {{ fmt(c.expiresOn) }}</span></span>
                   <span class="flex items-center gap-2"><app-badge [status]="c.status" />
-                    @if (d.canEdit) { <button type="button" class="btn btn-sm btn-quiet" (click)="removeCredential(c.credentialId)" [attr.aria-label]="'Remove ' + c.name">Remove</button> }</span>
+                    @if (d.canEdit) { <button type="button" class="btn btn-sm btn-quiet" (click)="removeCredential(c.credentialId, c.name)" [disabled]="cm.busy()">Remove<span class="sr-only"> {{ c.name }}</span></button> }</span>
                 </li>
               }
             </ul>
@@ -240,7 +245,9 @@ interface PatternRow { weekday: Weekday; works: boolean; shiftDefinitionId: numb
             </p>
             @if (invite(); as i) {
               <div class="alert alert-ok mt-3" role="status"><span aria-hidden="true">✓</span>
-                <div><p>Invitation link (valid 7 days):</p><p class="reading mt-1 break-all">{{ origin + i.acceptUrlPath }}</p><p class="mt-1">{{ i.note }}</p></div>
+                <div class="min-w-0"><p>Invitation link (valid 7 days, works only for {{ d.email }}):</p><p class="reading mt-1 break-all">{{ origin + i.acceptUrlPath }}</p>
+                  <button type="button" class="btn btn-sm mt-2" (click)="copyInvite(origin + i.acceptUrlPath)"><app-icon name="copy" [size]="15" />Copy link</button>
+                  <p class="mt-2">{{ i.note }}</p></div>
               </div>
             }
             <div class="mt-3 flex flex-wrap gap-2">
@@ -313,6 +320,7 @@ export class StaffEdit {
     if (this.isNew()) {
       this.form = this.blank();
       this.pattern = this.patternFrom([]);
+      this.saved = this.snapshot();
       this.ready.set(true);
       return;
     }
@@ -346,6 +354,7 @@ export class StaffEdit {
       return;
     }
     this.toasts.show(this.isNew() ? `${saved.firstName} ${saved.lastName} added.` : 'Changes saved.');
+    this.saved = this.snapshot();
     if (this.isNew()) await this.router.navigate(['/staff', saved.staffId]);
     else this.applyDetail(saved);
   }
@@ -361,7 +370,46 @@ export class StaffEdit {
     }
   }
 
-  protected async removeCredential(credentialId: number): Promise<void> {
+  private readonly confirm = inject(Confirm);
+  private saved = '';
+
+  /** True when the form differs from what was last loaded or saved. */
+  hasUnsavedChanges(): boolean {
+    return this.ready() && this.editable() && this.snapshot() !== this.saved;
+  }
+
+  protected onBeforeUnload(event: BeforeUnloadEvent): void {
+    if (this.hasUnsavedChanges()) event.preventDefault();
+  }
+
+  /** Route guard hook: asks before leaving with unsaved edits. */
+  async canLeave(): Promise<boolean> {
+    if (!this.hasUnsavedChanges()) return true;
+    const answer = await this.confirm.ask({
+      title: 'Leave without saving?', body: 'Your changes to this person are not saved yet.', confirmLabel: 'Discard changes', danger: true,
+    });
+    return answer.confirmed;
+  }
+
+  private snapshot(): string {
+    return JSON.stringify([this.form, this.pattern]);
+  }
+
+  protected async copyInvite(link: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(link);
+      this.toasts.show('Link copied. Send it to them directly.');
+    } catch {
+      this.toasts.show('Could not copy. Select the link and copy it instead.', 'block');
+    }
+  }
+
+  protected async removeCredential(credentialId: number, name: string): Promise<void> {
+    const answer = await this.confirm.ask({
+      title: `Remove ${name}?`, body: 'If it is required for their job, their shifts may be blocked from publishing until a new one is added.',
+      confirmLabel: 'Remove credential', danger: true,
+    });
+    if (!answer.confirmed) return;
     const d = await this.cm.run(() => this.api.deleteCredential(this.detail()!.staffId, credentialId));
     if (d) {
       this.detail.set(d);
@@ -378,6 +426,15 @@ export class StaffEdit {
   }
 
   protected async toggleActive(d: StaffDetail): Promise<void> {
+    if (d.isActive) {
+      const answer = await this.confirm.ask({
+        title: `Deactivate ${d.firstName} ${d.lastName}?`,
+        body: 'Their history is kept. These happen straight away:',
+        details: ['Signed out everywhere and can no longer sign in', 'Future shifts are removed from the schedule', 'Pending leave requests are closed', 'Any open invitation stops working'],
+        confirmLabel: 'Deactivate', danger: true,
+      });
+      if (!answer.confirmed) return;
+    }
     const updated = await this.am.run(() => this.api.setActive(d.staffId, !d.isActive));
     if (updated) {
       this.applyDetail(updated);
@@ -392,6 +449,7 @@ export class StaffEdit {
       startDate: d.startDate, overtimeEligible: d.overtimeEligible, employmentType: d.employmentType, pattern: d.pattern,
     };
     this.pattern = this.patternFrom(d.pattern);
+    this.saved = this.snapshot();
   }
 
   private patternFrom(days: StaffDetail['pattern']): PatternRow[] {

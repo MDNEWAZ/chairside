@@ -165,8 +165,14 @@ flowchart LR
 ## Security and multi-tenancy
 
 - **Tenant isolation in the database.** Every tenant table carries `ClinicId`. A SQL Server security policy filters and blocks rows by `SESSION_CONTEXT('ClinicId')`, which the API sets read-only on every connection. A query that forgets a filter still cannot read or write another clinic.
-- **Audit log written by triggers** on 11 tables (schedules, leave, attendance, staff, credentials, policies, overrides), with the user taken from the session context.
-- **Sessions**: HttpOnly, SameSite=Strict cookies, re-validated against the database on each request, so deactivation and role changes apply immediately.
+- **Audit log written by triggers** on 16 tables (schedules, leave, attendance, staff, work patterns, job titles, shift types, credentials, invitations, policies, overrides), with the user taken from the session context. Token hashes and password hashes are never copied into it.
+- **Sessions**: HttpOnly, SameSite=Strict cookies (`__Host-` prefixed over HTTPS), re-validated against the database on each request. Each account has a security stamp: signing out, or being deactivated, ends every session on every device, including copied cookies.
+- **Invitations** create a first account only, for the address they were sent to. A newer link revokes older ones, a changed address makes the link useless, an existing account can never be taken over, and links are never written to logs.
+- **Passwords**: 10–128 characters, common passwords and the email address refused (PBKDF2 hashing). Five wrong passwords lock that account for 15 minutes, on top of the per-IP rate limit.
+- **Strict input validation** on the server: plain `name@domain.tld` emails only (no display names, quotes or header tricks), no control or right-to-left override characters in names, dates limited to 2000–2100, enums and cross-references checked.
+- **Integrity under concurrency**: unique indexes (one shift per person, day and location; one override per shift and credential; one closed day per date) and SQL application locks around clock-in, "Fill week", publish, leave requests and decisions, and invitation acceptance, so double clicks and two managers at once cannot double-count.
+- **Browser hardening**: Content-Security-Policy (scripts only from the site, no framing), Permissions-Policy, X-Content-Type-Options, Referrer-Policy, Cross-Origin-Opener-Policy, HSTS when HTTPS is on.
+- **Demo protection**: in the shared demo clinic, invitations, plan and location changes, and deactivating or re-roling the sign-in personas are turned off, so one visitor cannot break the demo for others.
 - **CSRF**: every state-changing request must carry a custom header that browsers cannot send cross-site.
 - **Rate limiting** on sign-in, sign-up and invitation endpoints.
 - **Clock times from the database clock**, never the device.
@@ -260,9 +266,9 @@ node tests/e2e/api-smoke.mjs
 
 | Check | Result |
 |---|---|
-| Backend unit tests (xUnit) | 29 / 29 |
+| Backend unit tests (xUnit) | 53 / 53 |
 | Frontend unit tests (Vitest) | 4 / 4 |
-| End-to-end API suite | 182 / 182 |
+| End-to-end API suite (incl. invitation takeover, session revocation, lockout, DST, concurrency rules) | 212 / 212 |
 | Scripted browser journeys | 29 / 29 |
 | axe-core, WCAG 2.2 A/AA, 12 routes × light/dark × desktop/phone | 0 violations |
 | Lighthouse Accessibility / Best Practices | 100 / 100 |
@@ -324,6 +330,8 @@ Errors are RFC 9457 ProblemDetails; validation errors carry an `errors` object k
 
 **Known limitations**
 - Email, billing and push notifications are simulated.
+- No self-service "forgot password" yet (needs real email); the sign-in page tells people to ask their Owner / Admin.
+- The per-account sign-in lockout is held in memory, so it resets when the site restarts; a multi-server deployment should move it to the database or a cache.
 - Pay and compensation, hours reports and reminder jobs are not built yet.
 - The demo clinic is shared by everyone using a deployment.
 - Mobile LCP on Lighthouse's slow-4G profile is 2.8–3.0 s (target 2.5 s); desktop is 0.6–0.7 s.

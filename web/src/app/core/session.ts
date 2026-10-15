@@ -1,7 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { Api } from './api';
+import { Api, toApiError } from './api';
 import { Lookups, Me, Role, ShiftDefinitionItem } from './models';
 
 /** The signed-in person and clinic lookups, loaded once per session. */
@@ -12,6 +12,8 @@ export class Session {
 
   readonly me = signal<Me | null>(null);
   readonly lookups = signal<Lookups | null>(null);
+  /** Set when the start-up check could not reach the server (offline or a server error), as opposed to "signed out". */
+  readonly unreachable = signal<string | null>(null);
   readonly role = computed<Role | null>(() => this.me()?.role ?? null);
   readonly isOwner = computed(() => this.role() === 'owner_admin');
   readonly isManager = computed(() => this.role() === 'owner_admin' || this.role() === 'practice_manager');
@@ -25,8 +27,15 @@ export class Session {
       const session = await firstValueFrom(this.api.session());
       this.me.set(session?.me ?? null);
       this.lookups.set(session?.lookups ?? null);
-    } catch {
+      this.unreachable.set(null);
+    } catch (e) {
+      const err = toApiError(e);
       this.me.set(null);
+      // Offline or a server fault is not "signed out": show a retry screen instead of the sign-in page, and try again next time.
+      if (err.status === 0 || err.status >= 500) {
+        this.unreachable.set(err.status === 0 ? 'Chairside cannot reach the server. Check your internet connection.' : 'Chairside is having trouble on our side.');
+        return null;
+      }
     }
     this.loaded = true;
     return this.me();
@@ -68,7 +77,8 @@ export class Session {
 export const signedIn: CanActivateFn = async (_route, state) => {
   const session = inject(Session);
   const router = inject(Router);
-  return (await session.ensure()) ? true : router.createUrlTree(['/login'], { queryParams: { returnUrl: state.url } });
+  if (await session.ensure()) return true;
+  return session.unreachable() ? false : router.createUrlTree(['/login'], { queryParams: { returnUrl: state.url } });
 };
 
 export const managersOnly: CanActivateFn = async () => {
@@ -94,5 +104,6 @@ export const signedOut: CanActivateFn = async () => {
 export const homeRedirect: CanActivateFn = async () => {
   const session = inject(Session);
   const router = inject(Router);
-  return router.createUrlTree([(await session.ensure()) ? session.homeRoute() : '/login']);
+  const me = await session.ensure();
+  return session.unreachable() ? false : router.createUrlTree([me ? session.homeRoute() : '/login']);
 };

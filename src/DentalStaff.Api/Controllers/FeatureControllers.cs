@@ -59,6 +59,7 @@ public sealed class LeaveController(LeaveService leave) : ControllerBase
     [HttpGet("mine")] public Task<MyLeaveDto> Mine(CancellationToken ct) => leave.MineAsync(ct);
     [HttpPost("preview")] public Task<LeavePreviewDto> Preview(LeaveDraft r, CancellationToken ct) => leave.PreviewAsync(r, ct);
     [HttpPost] public Task<MyLeaveDto> Submit(LeaveDraft r, CancellationToken ct) => leave.RequestAsync(r, ct);
+    [HttpDelete("{id:int}")] public Task<MyLeaveDto> Cancel(int id, CancellationToken ct) => leave.CancelAsync(id, ct);
     [HttpGet("inbox")] public Task<List<InboxItemDto>> Inbox(CancellationToken ct) => leave.InboxAsync(ct);
     [HttpPost("{id:int}/decide")] public Task<List<InboxItemDto>> Decide(int id, DecideRequest r, CancellationToken ct) => leave.DecideAsync(id, r, ct);
     [HttpGet("team")] public Task<List<LeaveDto>> Team(DateOnly from, DateOnly to, CancellationToken ct) => leave.TeamAsync(from, to, ct);

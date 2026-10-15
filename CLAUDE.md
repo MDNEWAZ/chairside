@@ -16,7 +16,7 @@ docs/decisions.md extends and overrides the brief. Read it first.
 - src/DentalStaff.Application: use-case handlers, DTOs, IAppDbContext. References Domain only
 - src/DentalStaff.Infrastructure: AppDbContext, EF configurations, email, jobs
 - src/DentalStaff.Api: thin controllers, DI, auth, middleware
-- database/DentalStaff.DbMigrator/Scripts: one numbered .sql file per change (NNNN_description.sql)
+- database/DentalStaff.Database/Scripts: one numbered .sql file per change (NNNN_description.sql); DentalStaff.DbMigrator runs them
 - tests/DentalStaff.Tests: xUnit
 - web/: Angular app (web/src/app/core for services, one folder per feature)
 - design/: tokens, design rules, hero screens, content list

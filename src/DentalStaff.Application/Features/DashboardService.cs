@@ -42,7 +42,8 @@ public sealed class DashboardService(
             orderby s.StartTime
             select new { s.StaffId, Name = st.FirstName + " " + st.LastName, Job = j.Name, s.StartTime, s.EndTime }).ToListAsync(ct);
         var startOfToday = calendar.ToUtc(today, TimeOnly.MinValue);
-        var clocks = await db.Attendance.AsNoTracking().Where(a => a.ClockInUtc >= startOfToday).ToListAsync(ct);
+        var onShift = shifts.Select(s => s.StaffId).Distinct().ToList();
+        var clocks = await db.Attendance.AsNoTracking().Where(a => a.ClockInUtc >= startOfToday && onShift.Contains(a.StaffId)).ToListAsync(ct);
         var working = shifts.Select(s =>
         {
             var rec = clocks.Where(c => c.StaffId == s.StaffId).MaxBy(c => c.ClockInUtc);
@@ -52,7 +53,7 @@ public sealed class DashboardService(
 
         var homeStaff = await db.Staff.AsNoTracking().Where(s => s.IsActive && s.HomeLocationId == loc).Select(s => s.StaffId).ToListAsync(ct);
         var onLeave = (await leave.TeamAsync(today, today, ct)).Where(l => homeStaff.Contains(l.StaffId)).ToList();
-        var inbox = await leave.InboxAsync(ct);
+        var pendingLeave = await leave.PendingForMeCountAsync(ct);
 
         var credentials = await (
             from c in db.Credentials.AsNoTracking()
@@ -84,7 +85,7 @@ public sealed class DashboardService(
                 await db.Invitations.AnyAsync(i => i.ClinicId == user.ClinicId, ct));
         }
 
-        return new DashboardDto(loc, today, working, onLeave, inbox.Count, expiring, needsAttention,
+        return new DashboardDto(loc, today, working, onLeave, pendingLeave, expiring, needsAttention,
             week.Issues.Count, week.Issues.Count(i => i.Severity == nameof(IssueSeverity.Block)), week.DraftCount, checklist);
     }
 }

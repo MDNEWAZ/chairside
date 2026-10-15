@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, inject, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter, firstValueFrom } from 'rxjs';
@@ -7,6 +8,7 @@ import { instant } from '../core/format';
 import { Notifications, ROLE_LABEL } from '../core/models';
 import { Session } from '../core/session';
 import { Toasts } from '../core/toast';
+import { Confirm } from '../core/confirm';
 import { Avatar, Logo } from '../shared/brand';
 import { Icon, IconName } from '../shared/icons';
 import { Sheet } from '../shared/ui';
@@ -17,7 +19,7 @@ type Theme = 'system' | 'light' | 'dark';
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, Sheet, Icon, Logo, Avatar],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, NgTemplateOutlet, Sheet, Icon, Logo, Avatar],
   template: `
     <a class="skip-link" href="#main" (click)="skipToMain($event)">Skip to main content</a>
 
@@ -155,23 +157,66 @@ type Theme = 'system' | 'light' | 'dark';
       }
     </app-sheet>
 
-    <div class="pointer-events-none fixed inset-x-0 bottom-20 z-40 flex flex-col items-center gap-2 px-4 md:bottom-6" aria-live="polite" role="status">
-      @for (t of toasts.items(); track t.id) {
-        <div class="enter pointer-events-auto flex max-w-md items-center gap-3 rounded-card bg-ink px-4 py-3 text-sm text-bg" style="box-shadow: var(--shadow-2)">
-          <app-icon [name]="t.tone === 'block' ? 'circle-alert' : t.tone === 'neutral' ? 'info' : 'circle-check'" [size]="18" />
-          <span>{{ t.message }}</span>
-          @if (t.action; as a) {
-            <button type="button" class="ml-1 inline-flex items-center gap-1 font-semibold underline underline-offset-2" (click)="a.run(); toasts.dismiss(t.id)"><app-icon name="undo" [size]="15" />{{ a.label }}</button>
-          }
-          <button type="button" class="ml-auto opacity-80 hover:opacity-100" (click)="toasts.dismiss(t.id)" aria-label="Dismiss message"><app-icon name="x" [size]="16" /></button>
-        </div>
-      }
+    <!-- Two live regions: successes are announced politely, failures assertively. Timers pause on hover and focus. -->
+    <div class="pointer-events-none fixed inset-x-0 bottom-20 z-40 flex flex-col items-center gap-2 px-4 md:bottom-6">
+      <div class="contents" role="status" aria-live="polite">
+        @for (t of okToasts(); track t.id) { <ng-container *ngTemplateOutlet="toastTpl; context: { $implicit: t }" /> }
+      </div>
+      <div class="contents" role="alert" aria-live="assertive">
+        @for (t of errorToasts(); track t.id) { <ng-container *ngTemplateOutlet="toastTpl; context: { $implicit: t }" /> }
+      </div>
     </div>
+    <ng-template #toastTpl let-t>
+      <div class="enter pointer-events-auto flex max-w-md items-center gap-3 rounded-card px-4 py-3 text-sm" style="box-shadow: var(--shadow-2)"
+           [class]="t.tone === 'block' ? 'bg-block text-bg' : 'bg-ink text-bg'"
+           (mouseenter)="toasts.pause(t.id)" (mouseleave)="toasts.resume(t.id)" (focusin)="toasts.pause(t.id)" (focusout)="toasts.resume(t.id)">
+        <app-icon [name]="t.tone === 'block' ? 'circle-alert' : t.tone === 'neutral' ? 'info' : 'circle-check'" [size]="18" />
+        <span>{{ t.message }}</span>
+        @if (t.action; as a) {
+          <button type="button" class="ml-1 inline-flex min-h-9 items-center gap-1 font-semibold underline underline-offset-2" (click)="a.run(); toasts.dismiss(t.id)"><app-icon name="undo" [size]="15" />{{ a.label }}</button>
+        }
+        <button type="button" class="ml-auto grid h-9 w-9 place-items-center opacity-80 hover:opacity-100" (click)="toasts.dismiss(t.id)" aria-label="Dismiss message"><app-icon name="x" [size]="16" /></button>
+      </div>
+    </ng-template>
+
+    <!-- The one confirm dialog for risky actions. -->
+    <app-sheet #confirmSheet [heading]="confirm.request()?.title ?? 'Confirm'" (closed)="onConfirmClosed()">
+      @if (confirm.request(); as c) {
+        <form class="flex flex-col gap-4" (submit)="$event.preventDefault(); accept()" novalidate>
+          <p>{{ c.body }}</p>
+          @if (c.details?.length) {
+            <ul class="max-h-48 list-disc space-y-1 overflow-y-auto rounded-control bg-raised py-2 pl-7 pr-3 text-sm">
+              @for (d of c.details; track $index) { <li>{{ d }}</li> }
+            </ul>
+          }
+          @if (c.input; as inp) {
+            <div class="field">
+              <label class="label" for="confirm-text">{{ inp.label }}{{ inp.required ? '' : ' (optional)' }}</label>
+              <textarea id="confirm-text" class="input" rows="3" [attr.maxlength]="inp.maxLength" [value]="confirmText()" (input)="confirmText.set($any($event.target).value)"
+                        [attr.aria-invalid]="confirmError() ? true : null" [attr.aria-describedby]="confirmError() ? 'confirm-error' : (inp.help ? 'confirm-help' : null)"></textarea>
+              @if (inp.help) { <p id="confirm-help" class="help">{{ inp.help }}</p> }
+              @if (confirmError()) { <p id="confirm-error" class="field-error">{{ confirmError() }}</p> }
+            </div>
+          }
+          <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" class="btn" (click)="confirmSheet.close()">Cancel</button>
+            <button type="submit" class="btn" [class.btn-danger]="c.danger" [class.btn-primary]="!c.danger">{{ c.confirmLabel }}</button>
+          </div>
+        </form>
+      }
+    </app-sheet>
   `,
 })
 export class Shell {
   protected readonly session = inject(Session);
   protected readonly toasts = inject(Toasts);
+  protected readonly confirm = inject(Confirm);
+  protected readonly okToasts = computed(() => this.toasts.items().filter((t) => t.tone !== 'block'));
+  protected readonly errorToasts = computed(() => this.toasts.items().filter((t) => t.tone === 'block'));
+  protected readonly confirmText = signal('');
+  protected readonly confirmError = signal<string | null>(null);
+  private readonly confirmSheet = viewChild.required<Sheet>('confirmSheet');
+  private confirmAccepted = false;
   private readonly api = inject(Api);
   private readonly router = inject(Router);
   private readonly main = viewChild.required<ElementRef<HTMLElement>>('main');
@@ -199,12 +244,39 @@ export class Shell {
   protected readonly overflow = computed(() => this.nav().filter((i) => !this.tabs().includes(i)));
 
   constructor() {
+    // Open the confirm sheet whenever a page asks a question.
+    effect(() => {
+      if (this.confirm.request()) {
+        this.confirmText.set(this.confirm.request()?.input?.value ?? '');
+        this.confirmError.set(null);
+        this.confirmAccepted = false;
+        queueMicrotask(() => this.confirmSheet().open());
+      }
+    });
     void this.refreshNotifications();
     // On each navigation, move focus to the new page's heading so screen readers announce it.
     this.router.events.pipe(filter((e) => e instanceof NavigationEnd), takeUntilDestroyed(inject(DestroyRef))).subscribe(() => {
       setTimeout(() => (this.main().nativeElement.querySelector('h1') as HTMLElement | null)?.focus());
       void this.refreshNotifications();
     });
+  }
+
+  protected accept(): void {
+    const req = this.confirm.request();
+    if (!req) return;
+    const text = this.confirmText().trim();
+    if (req.input?.required && !text) {
+      this.confirmError.set('Enter ' + req.input.label.toLowerCase() + ' to continue.');
+      setTimeout(() => document.getElementById('confirm-text')?.focus());
+      return;
+    }
+    this.confirmAccepted = true;
+    this.confirmSheet().close();
+    this.confirm.answer({ confirmed: true, text });
+  }
+
+  protected onConfirmClosed(): void {
+    if (!this.confirmAccepted) this.confirm.answer({ confirmed: false });
   }
 
   protected skipToMain(event: Event): void {
