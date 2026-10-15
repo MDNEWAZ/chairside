@@ -26,8 +26,10 @@ builder.Services.AddRateLimiter(o =>
     o.RejectionStatusCode = 429;
     // Sign-in, sign-up and invitation endpoints: 10 attempts per minute per IP address (configurable for test runs).
     var authPerMinute = builder.Configuration.GetValue("RateLimit:AuthPerMinute", 10);
+    // Set when a proxy (the Vercel front end) forwards /api here, so limits apply per visitor, not per proxy.
+    var behindProxy = builder.Configuration.GetValue("Hosting:BehindProxy", false);
     o.AddPolicy("auth", ctx => RateLimitPartition.GetFixedWindowLimiter(
-        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        ClientAddress.For(ctx, behindProxy),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = authPerMinute, Window = TimeSpan.FromMinutes(1) }));
 });
 builder.Services.AddControllers()
