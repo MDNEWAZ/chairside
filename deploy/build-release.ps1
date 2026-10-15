@@ -6,7 +6,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $PSScriptRoot 'out'
 $site = Join-Path $out 'site'
 
-Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $site, (Join-Path $out 'chairside-site.zip') -Recurse -Force -ErrorAction SilentlyContinue  # keep the Vercel folder and tunnel log
 New-Item -ItemType Directory -Force $site | Out-Null
 
 Write-Host '1/4 Building the Angular app' -ForegroundColor Cyan

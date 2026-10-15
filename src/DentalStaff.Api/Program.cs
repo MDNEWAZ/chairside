@@ -12,12 +12,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 // HTTPS is required outside Development. A host without a certificate yet can turn it off for a first test only.
 var requireHttps = builder.Configuration.GetValue("Hosting:RequireHttps", !builder.Environment.IsDevelopment());
+// Behind a proxy (Vercel, a tunnel) the browser always uses HTTPS even if the last hop here is plain HTTP.
+var behindProxy = builder.Configuration.GetValue("Hosting:BehindProxy", false);
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, CurrentUser>();
-builder.Services.AddCookieAuth(requireHttps);
+builder.Services.AddCookieAuth(requireHttps || behindProxy);
 // Every endpoint requires a signed-in user unless it opts out with [AllowAnonymous].
 builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
@@ -26,8 +28,7 @@ builder.Services.AddRateLimiter(o =>
     o.RejectionStatusCode = 429;
     // Sign-in, sign-up and invitation endpoints: 10 attempts per minute per IP address (configurable for test runs).
     var authPerMinute = builder.Configuration.GetValue("RateLimit:AuthPerMinute", 10);
-    // Set when a proxy (the Vercel front end) forwards /api here, so limits apply per visitor, not per proxy.
-    var behindProxy = builder.Configuration.GetValue("Hosting:BehindProxy", false);
+    // Behind a proxy, limits apply per visitor, not per proxy.
     o.AddPolicy("auth", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ClientAddress.For(ctx, behindProxy),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = authPerMinute, Window = TimeSpan.FromMinutes(1) }));
